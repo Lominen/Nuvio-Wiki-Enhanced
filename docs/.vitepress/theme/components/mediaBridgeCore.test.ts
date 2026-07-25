@@ -391,7 +391,7 @@ test('maps alternate anime numbering only with strong title or sequence evidence
   assert.equal(anchored.status, 'mapped')
   assert.equal(anchored.confidence, 'medium')
   assert.equal(anchored.target?.videoId, 'target:current')
-  assert.match(anchored.reason, /Nearby unique episode titles/)
+  assert.match(anchored.reason, /Unique episode-title anchors/)
   assert.equal(anchored.evidence?.sequenceAnchors?.length, 2)
 
   const unsafeOrdinal = remapEpisode(
@@ -407,6 +407,53 @@ test('maps alternate anime numbering only with strong title or sequence evidence
   assert.equal(unsafeOrdinal.target, null)
   assert.equal(unsafeOrdinal.evidence?.sequenceCandidate, null)
   assert.equal(unsafeOrdinal.evidence?.sequenceAnchors?.length, 2)
+})
+
+test('maps a long anime sequence after excluding specials and duplicate addon episodes', () => {
+  const sourceEpisodes: EpisodeRef[] = Array.from({ length: 23 }, (_, index) => ({
+    season: 12,
+    episode: 395 + index,
+    absoluteEpisode: 395 + index,
+    title: `Trakt source installment ${395 + index}`,
+    videoId: `trakt:${856604 + index}`
+  }))
+  sourceEpisodes[0].title = 'Time Limit - The Human Auction Begins'
+  sourceEpisodes[16].title = 'The Secret Hidden on the Backs - Luffy and the Snake Princess Meet'
+  sourceEpisodes[22].title = 'Love is a Hurricane! Hancock Madly in Love!'
+
+  const destinationEpisodes: EpisodeRef[] = [
+    ...Array.from({ length: 24 }, (_, index) => ({
+      season: 0,
+      episode: index + 1,
+      title: `Special ${index + 1}`,
+      videoId: `tt0388629:0:${index + 1}`
+    })),
+    ...Array.from({ length: 23 }, (_, index) => ({
+      season: 13,
+      episode: 14 + index,
+      title: `Destination installment ${14 + index}`,
+      videoId: `tt0388629:13:${14 + index}`
+    }))
+  ]
+  destinationEpisodes[24].title = 'Time Limit - The Human Auction Begins'
+  destinationEpisodes[40].title = 'Secret Hidden on Their Backs - Luffy Meets the Snake Princess'
+  destinationEpisodes[46].title = 'Love is a Hurricane! Hancock Madly in Love!'
+  destinationEpisodes.push({ ...destinationEpisodes[29] })
+
+  const mapping = remapEpisode(
+    sourceEpisodes[16],
+    sourceEpisodes,
+    destinationEpisodes
+  )
+
+  assert.equal(mapping.status, 'mapped')
+  assert.equal(mapping.confidence, 'medium')
+  assert.equal(mapping.target?.videoId, 'tt0388629:13:30')
+  assert.match(mapping.reason, /normalized sequence position/)
+  assert.deepEqual(
+    mapping.evidence?.sequenceAnchors?.map(anchor => [anchor.sourceIndex, anchor.targetIndex]),
+    [[0, 0], [22, 22]]
+  )
 })
 
 test('never guesses an episode by ordered position after deterministic matches fail', () => {

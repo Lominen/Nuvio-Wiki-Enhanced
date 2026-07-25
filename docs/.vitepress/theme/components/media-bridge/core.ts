@@ -826,6 +826,21 @@ function sortedEpisodes(episodes: readonly EpisodeRef[]): EpisodeRef[] {
   return [...episodes].sort(episodeSort)
 }
 
+function normalizedRegularEpisodeSequence(episodes: readonly EpisodeRef[]): EpisodeRef[] {
+  const seen = new Set<string>()
+  return sortedEpisodes(episodes)
+    .filter(episode => episode.season > 0 && episode.episode > 0)
+    .filter(episode => {
+      const videoId = String(episode.videoId || '').trim()
+      const key = videoId
+        ? `video:${videoId}`
+        : `coordinate:${episode.season}:${episode.episode}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
 function meaningfulEpisodeTitle(value: unknown): string {
   const normalized = normalizeTitle(value)
   if (!normalized || /^(episode|ep|e|chapter|aflevering)\s*\d+$/.test(normalized)) return ''
@@ -834,7 +849,6 @@ function meaningfulEpisodeTitle(value: unknown): string {
 
 const FUZZY_TITLE_THRESHOLD = 0.94
 const SEQUENCE_TITLE_THRESHOLD = 0.72
-const MAX_SEQUENCE_ANCHOR_DISTANCE = 5
 
 function fuzzyTitleEligible(title: string): boolean {
   return title.length >= 12 && title.split(' ').filter(Boolean).length >= 3
@@ -918,8 +932,14 @@ function anchoredSequenceCandidate(
   sourceEpisodes: readonly EpisodeRef[],
   targetEpisodes: readonly EpisodeRef[]
 ): { candidate: EpisodeRef | null; anchors: EpisodeSequenceAnchor[] } {
-  const orderedSource = sortedEpisodes(sourceEpisodes)
-  const orderedTarget = sortedEpisodes(targetEpisodes)
+  // Match Nuvio's native Trakt mapper by comparing the regular-episode
+  // sequences, not season-zero specials, and by removing duplicate addon
+  // entries before indexes are compared. Unlike Nuvio's unconditional
+  // same-index fallback, the bridge still requires two exact-title anchors and
+  // a similar candidate title before accepting the translated position.
+  if (source.season <= 0 || source.episode <= 0) return { candidate: null, anchors: [] }
+  const orderedSource = normalizedRegularEpisodeSequence(sourceEpisodes)
+  const orderedTarget = normalizedRegularEpisodeSequence(targetEpisodes)
   const sourceIndex = orderedSource.indexOf(source)
   if (sourceIndex < 0) return { candidate: null, anchors: [] }
 
@@ -943,13 +963,10 @@ function anchoredSequenceCandidate(
   if (!before || !after) return { candidate: null, anchors: [] }
 
   const beforeDistance = sourceIndex - before.sourceIndex
-  const afterDistance = after.sourceIndex - sourceIndex
   const sourceSpan = after.sourceIndex - before.sourceIndex
   const targetSpan = after.targetIndex - before.targetIndex
   if (
-    beforeDistance > MAX_SEQUENCE_ANCHOR_DISTANCE
-    || afterDistance > MAX_SEQUENCE_ANCHOR_DISTANCE
-    || sourceSpan !== targetSpan
+    sourceSpan !== targetSpan
     || targetSpan <= 1
   ) return { candidate: null, anchors: [before, after] }
 
@@ -1188,7 +1205,7 @@ export function remapEpisode(
       ...mapped(
         'medium',
         sequence.candidate,
-        'Nearby unique episode titles confirm the same sequence position across differently numbered catalogs.'
+        'Unique episode-title anchors confirm the same normalized sequence position across differently numbered catalogs.'
       ),
       evidence: sequenceEvidence
     }
