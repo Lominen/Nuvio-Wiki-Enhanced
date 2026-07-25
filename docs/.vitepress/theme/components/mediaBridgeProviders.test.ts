@@ -1453,6 +1453,7 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
       ids: { ...baseMedia.ids },
       season: 2,
       episode: 1,
+      absoluteEpisode: 40,
       episodeTitle: 'Gohan’s Hidden Powers',
       videoId: 'trakt:65122'
     },
@@ -1465,6 +1466,7 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
       ids: { ...baseMedia.ids },
       season: 2,
       episode: 1,
+      absoluteEpisode: 40,
       episodeTitle: 'Gohan’s Hidden Powers',
       videoId: 'trakt:65122'
     },
@@ -1498,6 +1500,8 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
   assert.equal(mappings.length, 2)
   assert.ok(mappings.every(item => item.mapping.status === 'mapped'))
   assert.ok(mappings.every(item => item.mapping.target?.videoId === 'kitsu:99:1:40'))
+  assert.ok(mappings.every(item => item.mapping.target?.absoluteEpisode === 40))
+  assert.ok(mappings.every(item => /absolute episode number/.test(item.mapping.reason)))
 
   const plan = planMediaBridgePreview({
     source: enriched,

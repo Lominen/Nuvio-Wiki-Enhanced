@@ -3686,8 +3686,24 @@ interface StremioVideo {
   id: string
   season: number
   episode: number
+  absoluteEpisode?: number
   title?: string
   released?: string
+}
+
+function stremioAbsoluteEpisode(video: any): number | undefined {
+  for (const value of [
+    video?.absoluteEpisode,
+    video?.absolute_episode,
+    video?.absoluteNumber,
+    video?.absolute_number,
+    video?.number_abs,
+    video?.episode_abs
+  ]) {
+    const number = Number(value)
+    if (Number.isSafeInteger(number) && number > 0) return number
+  }
+  return undefined
 }
 
 const cinemetaCache = new Map<string, Promise<any | null>>()
@@ -3819,6 +3835,7 @@ function orderedStremioVideos(meta: any): StremioVideo[] {
       id: String(video?.id || ''),
       season: Number(video?.season),
       episode: Number(video?.episode ?? video?.number),
+      absoluteEpisode: stremioAbsoluteEpisode(video),
       title: video?.title || video?.name,
       released: video?.released
     }))
@@ -3990,9 +4007,20 @@ function defaultStremioState(existing: any = {}) {
 }
 
 function episodeRefs(videos: readonly StremioVideo[]): EpisodeRef[] {
+  const regularVideos = videos.filter(video => video.season > 0)
+  const regularSeasons = new Set(regularVideos.map(video => video.season))
+  const regularCoordinates = new Set(
+    regularVideos.map(video => `${video.season}:${video.episode}`)
+  )
+  const inferSingleSeasonAbsolute = (
+    regularSeasons.size === 1
+    && regularCoordinates.size === regularVideos.length
+  )
   return videos.map(video => ({
     season: video.season,
     episode: video.episode,
+    absoluteEpisode: video.absoluteEpisode
+      || (inferSingleSeasonAbsolute && video.season > 0 ? video.episode : undefined),
     title: video.title,
     videoId: video.id
   }))

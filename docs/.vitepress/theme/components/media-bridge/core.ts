@@ -771,6 +771,7 @@ export interface EpisodeMappingEvidence {
   sequenceCandidate?: EpisodeRef | null
   sequenceCandidateTitleSimilarity?: number | null
   sequenceAnchors?: readonly EpisodeSequenceAnchor[]
+  sequenceStrategy?: 'anchored' | 'same-index'
 }
 
 export interface EpisodeSimilarityMatch {
@@ -850,6 +851,8 @@ function meaningfulEpisodeTitle(value: unknown): string {
 
 const FUZZY_TITLE_THRESHOLD = 0.94
 const SEQUENCE_TITLE_THRESHOLD = 0.72
+const SAME_INDEX_MIN_CATALOG_SIZE = 12
+const SAME_INDEX_MAX_CATALOG_DELTA_RATIO = 0.06
 
 function fuzzyTitleEligible(title: string): boolean {
   return title.length >= 12 && title.split(' ').filter(Boolean).length >= 3
@@ -993,6 +996,37 @@ function anchoredSequenceCandidate(
   const targetTitle = meaningfulEpisodeTitle(candidate?.title)
   const titleSimilarity = episodeTitleSimilarityScore(sourceTitle, targetTitle)
   return { candidate, anchors: [before, after], titleSimilarity }
+}
+
+function sameIndexSequenceCandidate(
+  source: EpisodeRef,
+  sourceEpisodes: readonly EpisodeRef[],
+  targetEpisodes: readonly EpisodeRef[]
+): { candidate: EpisodeRef | null; titleSimilarity?: number | null } {
+  // Nuvio's native TraktEpisodeMapping falls back to the same position in the
+  // two season/episode-sorted catalogs. Keep that behavior for substantial,
+  // similarly sized catalogs after specials and duplicate addon rows have
+  // been removed. Small or materially divergent catalogs remain unresolved.
+  const orderedSource = normalizedRegularEpisodeSequence(sourceEpisodes)
+  const orderedTarget = normalizedRegularEpisodeSequence(targetEpisodes)
+  if (
+    orderedSource.length < SAME_INDEX_MIN_CATALOG_SIZE
+    || orderedTarget.length < SAME_INDEX_MIN_CATALOG_SIZE
+  ) return { candidate: null }
+
+  const catalogDeltaRatio = Math.abs(orderedSource.length - orderedTarget.length)
+    / Math.max(orderedSource.length, orderedTarget.length)
+  if (catalogDeltaRatio > SAME_INDEX_MAX_CATALOG_DELTA_RATIO) return { candidate: null }
+
+  const sourceIndex = orderedSource.indexOf(source)
+  if (sourceIndex < 0 || sourceIndex >= orderedTarget.length) return { candidate: null }
+  const candidate = orderedTarget[sourceIndex]
+  const sourceTitle = meaningfulEpisodeTitle(source.title)
+  const targetTitle = meaningfulEpisodeTitle(candidate.title)
+  return {
+    candidate,
+    titleSimilarity: episodeTitleSimilarityScore(sourceTitle, targetTitle)
+  }
 }
 
 function ambiguous(
@@ -1215,7 +1249,8 @@ export function remapEpisode(
     ...fuzzyEvidence,
     sequenceCandidate: sequence.candidate,
     sequenceCandidateTitleSimilarity: sequence.titleSimilarity,
-    sequenceAnchors: sequence.anchors
+    sequenceAnchors: sequence.anchors,
+    sequenceStrategy: sequence.candidate ? 'anchored' : undefined
   }
   if (sequence.candidate) {
     const similarTitle = (
@@ -1232,6 +1267,34 @@ export function remapEpisode(
           : 'Unique episode-title anchors confirm the same normalized sequence position; the destination candidate title differs, so confidence is reduced.'
       ),
       evidence: sequenceEvidence
+    }
+  }
+
+  // Conflicting anchors are evidence that the catalogs diverge at this point,
+  // so only apply Nuvio's same-index fallback when no anchors were found.
+  const sameIndex: { candidate: EpisodeRef | null; titleSimilarity?: number | null } = sequence.anchors.length
+    ? { candidate: null }
+    : sameIndexSequenceCandidate(source, sourceEpisodes, targetEpisodes)
+  if (sameIndex.candidate) {
+    const similarTitle = (
+      sameIndex.titleSimilarity !== null
+      && sameIndex.titleSimilarity !== undefined
+      && sameIndex.titleSimilarity >= SEQUENCE_TITLE_THRESHOLD
+    )
+    return {
+      ...mapped(
+        similarTitle ? 'medium' : 'low',
+        sameIndex.candidate,
+        similarTitle
+          ? 'Comparable normalized catalogs and a similar title confirm Nuvio-compatible same-index episode mapping.'
+          : 'Comparable normalized catalogs support Nuvio-compatible same-index episode mapping; confidence is reduced because the titles differ.'
+      ),
+      evidence: {
+        ...sequenceEvidence,
+        sequenceCandidate: sameIndex.candidate,
+        sequenceCandidateTitleSimilarity: sameIndex.titleSimilarity,
+        sequenceStrategy: 'same-index'
+      }
     }
   }
 

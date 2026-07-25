@@ -25,6 +25,11 @@ server/node_modules/
 # Scratch files
 scratch/
 
+# Local repository helpers
+/Start Nuvio Wiki.cmd
+/Upload-To-GitHub.ps1
+/GITHUB_UPLOAD_COMMANDS.md
+
 # Local agent instructions
 /AGENTS.md
 

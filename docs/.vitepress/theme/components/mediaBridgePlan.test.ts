@@ -4,6 +4,7 @@ import {
   createEmptyBundle,
   remapEpisode,
   type CanonicalBundle,
+  type EpisodeRef,
   type MediaRef,
   type SyncScopes
 } from './mediaBridgeCore.ts'
@@ -878,7 +879,48 @@ test('shows the accepted sequence candidate and low title similarity in diagnost
   assert.equal(plan.rows[0].mappingConfidence, 'low')
   assert.match(
     plan.rows[0].diagnostics.find(diagnostic => diagnostic.key === 'sequenceCandidate')?.value || '',
-    /S15E09.*A Completely Different Localized Title.*kitsu:one-piece:525.*% title similarity/
+    /S15E09.*A Completely Different Localized Title.*kitsu:one-piece:525.*% title similarity.*surrounding-anchor alignment/
+  )
+})
+
+test('identifies Nuvio-compatible same-index fallback in diagnostics', () => {
+  const source = createEmptyBundle()
+  const sourceEpisodes: EpisodeRef[] = Array.from({ length: 12 }, (_, index) => ({
+    season: 2,
+    episode: index + 1,
+    title: `Source installment ${index + 1}`,
+    videoId: `trakt:${index + 1}`
+  }))
+  const destinationEpisodes: EpisodeRef[] = Array.from({ length: 12 }, (_, index) => ({
+    season: 1,
+    episode: index + 1,
+    title: `Destination chapter ${index + 1}`,
+    videoId: `kitsu:test:${index + 1}`
+  }))
+  const sourceMedia: MediaRef = {
+    kind: 'series',
+    ids: { imdb: 'tt1234567' },
+    title: 'Different Numbering',
+    season: 2,
+    episode: 6,
+    episodeTitle: sourceEpisodes[5].title,
+    videoId: sourceEpisodes[5].videoId
+  }
+  source.history.push({ media: sourceMedia, watchedAt: 500 })
+  const mapping = remapEpisode(sourceEpisodes[5], sourceEpisodes, destinationEpisodes)
+  const plan = planMediaBridgePreview({
+    source,
+    destination: createEmptyBundle(),
+    scopes: ALL_SCOPES,
+    mappingIssues: [{ scope: 'history', sourceMedia, mapping }]
+  })
+
+  assert.equal(mapping.status, 'mapped')
+  assert.equal(mapping.confidence, 'low')
+  assert.equal(plan.stats.remapped, 1)
+  assert.match(
+    plan.rows[0].diagnostics.find(diagnostic => diagnostic.key === 'sequenceCandidate')?.value || '',
+    /S01E06.*kitsu:test:6.*Nuvio-compatible same-index fallback/
   )
 })
 

@@ -320,13 +320,17 @@ function sequenceAnchorsLabel(anchors: readonly EpisodeSequenceAnchor[]): string
 
 function sequenceCandidateLabel(
   candidate: EpisodeRef | null | undefined,
-  titleSimilarity: number | null | undefined
+  titleSimilarity: number | null | undefined,
+  strategy: EpisodeMappingEvidence['sequenceStrategy']
 ): string {
   if (!candidate) return 'Unavailable'
   const similarity = titleSimilarity === null || titleSimilarity === undefined
     ? 'title similarity unavailable'
     : `${(titleSimilarity * 100).toFixed(1)}% title similarity`
-  return `${episodeRefLabel(candidate)} · ${similarity}`
+  const strategyLabel = strategy === 'same-index'
+    ? 'Nuvio-compatible same-index fallback'
+    : 'surrounding-anchor alignment'
+  return `${episodeRefLabel(candidate)} · ${similarity} · ${strategyLabel}`
 }
 
 function mediaIdsLabel(ids: MediaIds): string {
@@ -392,7 +396,8 @@ function mappingEvidenceDiagnostics(
         key: 'sequenceCandidate',
         value: sequenceCandidateLabel(
           evidence.sequenceCandidate,
-          evidence.sequenceCandidateTitleSimilarity
+          evidence.sequenceCandidateTitleSimilarity,
+          evidence.sequenceStrategy
         )
       })
     }

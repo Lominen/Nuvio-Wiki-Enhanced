@@ -458,6 +458,72 @@ test('maps a long anime sequence after excluding specials and duplicate addon ep
   )
 })
 
+test('uses Nuvio-compatible same-index mapping only for comparable long catalogs', () => {
+  const narutoSource: EpisodeRef[] = Array.from({ length: 222 }, (_, index) => ({
+    season: 2,
+    episode: index + 1,
+    absoluteEpisode: index + 1,
+    title: `Trakt Naruto installment ${index + 1}`,
+    videoId: `trakt:naruto:${index + 1}`
+  }))
+  narutoSource[73].title = "Astonishing Truth! Gaara's Identity Emerges!"
+  const narutoTarget: EpisodeRef[] = Array.from({ length: 230 }, (_, index) => ({
+    season: 1,
+    episode: index + 1,
+    title: `Kitsu Naruto installment ${index + 1}`,
+    videoId: `kitsu:naruto:${index + 1}`
+  }))
+  const naruto = remapEpisode(narutoSource[73], narutoSource, narutoTarget)
+
+  assert.equal(naruto.status, 'mapped')
+  assert.equal(naruto.confidence, 'low')
+  assert.equal(naruto.target?.videoId, 'kitsu:naruto:74')
+  assert.equal(naruto.evidence?.sequenceStrategy, 'same-index')
+  assert.equal(naruto.evidence?.sequenceAnchors?.length, 0)
+  assert.match(naruto.reason, /Nuvio-compatible same-index/)
+
+  const jujutsuSource: EpisodeRef[] = Array.from({ length: 69 }, (_, index) => ({
+    season: 1,
+    episode: index + 1,
+    absoluteEpisode: index + 1,
+    title: `Trakt Jujutsu installment ${index + 1}`,
+    videoId: `trakt:jujutsu:${index + 1}`
+  }))
+  jujutsuSource[54].title = 'Tokyo Colony No. 1 (2)'
+  const jujutsuTarget: EpisodeRef[] = Array.from({ length: 66 }, (_, index) => ({
+    season: 2,
+    episode: index + 1,
+    title: index === 54 ? 'Tokyo No. 1 Colony, Part 2' : `Kitsu Jujutsu installment ${index + 1}`,
+    videoId: `kitsu:jujutsu:${index + 1}`
+  }))
+  const jujutsu = remapEpisode(jujutsuSource[54], jujutsuSource, jujutsuTarget)
+
+  assert.equal(jujutsu.status, 'mapped')
+  assert.equal(jujutsu.target?.videoId, 'kitsu:jujutsu:55')
+  assert.equal(jujutsu.evidence?.sequenceStrategy, 'same-index')
+
+  const bleachSource: EpisodeRef[] = Array.from({ length: 423 }, (_, index) => ({
+    season: 2,
+    episode: index + 1,
+    absoluteEpisode: index + 1,
+    title: `Trakt Bleach installment ${index + 1}`,
+    videoId: `trakt:bleach:${index + 1}`
+  }))
+  bleachSource[398].title = 'GATE OF THE SUN'
+  const bleachTarget: EpisodeRef[] = Array.from({ length: 373 }, (_, index) => ({
+    season: 1,
+    episode: index + 1,
+    title: `Kitsu Bleach installment ${index + 1}`,
+    videoId: `kitsu:bleach:${index + 1}`
+  }))
+  const bleach = remapEpisode(bleachSource[398], bleachSource, bleachTarget)
+
+  assert.equal(bleach.status, 'unresolved')
+  assert.equal(bleach.target, null)
+  assert.equal(bleach.evidence?.sequenceStrategy, undefined)
+  assert.equal(bleach.evidence?.sequenceCandidate, null)
+})
+
 test('never guesses an episode by ordered position after deterministic matches fail', () => {
   const duplicateTitle = remapEpisode(
     { season: 1, episode: 3, title: 'Finale' },
