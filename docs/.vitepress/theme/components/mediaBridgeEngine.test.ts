@@ -170,10 +170,12 @@ test('enriches a TMDB-only source to IMDb before planning a Nuvio write', async 
     verifyScopes: []
   }
   let enrichmentCalls = 0
+  let enrichmentProfile: string | number | null | undefined
   const engine = createMediaBridgeEngine({
     adapters: adapters(state),
-    async enrichBundle(bundle) {
+    async enrichBundle(bundle, _log, endpoint) {
       enrichmentCalls++
+      enrichmentProfile = endpoint?.profileId
       const enriched = structuredClone(bundle)
       enriched.library[0].media.ids.imdb = 'tt2015381'
       return enriched
@@ -181,6 +183,7 @@ test('enriches a TMDB-only source to IMDb before planning a Nuvio write', async 
   })
   const prepared = await engine.preview(engineInput('trakt', 'nuvio'))
   assert.equal(enrichmentCalls, 1)
+  assert.equal(enrichmentProfile, 2)
   assert.equal(prepared.plan.transfer.library[0].media.ids.imdb, 'tt2015381')
   assert.equal(prepared.plan.transfer.library[0].media.ids.tmdb, 118340)
 })

@@ -377,17 +377,19 @@ export function createMediaBridgeEngine(
     let sourceBundle = sourceResult.bundle
     let destinationBundle = destinationResult.bundle
     if (input.destination.service === 'nuvio' && input.source.service !== 'nuvio') {
-      emit('enrich', 'Resolving source IMDb/TMDB aliases for Nuvio.', { provider: 'nuvio' })
+      emit('enrich', 'Resolving source IMDb/TMDB/Kitsu aliases for Nuvio.', { provider: 'nuvio' })
       sourceBundle = await enrichBundle(
         sourceBundle,
-        message => emit('enrich', message, { provider: 'nuvio' })
+        message => emit('enrich', message, { provider: 'nuvio' }),
+        input.destination
       )
     }
     if (input.source.service === 'nuvio' && input.destination.service !== 'nuvio') {
-      emit('enrich', 'Resolving destination IMDb/TMDB aliases for Nuvio.', { provider: 'nuvio' })
+      emit('enrich', 'Resolving destination IMDb/TMDB/Kitsu aliases for Nuvio.', { provider: 'nuvio' })
       destinationBundle = await enrichBundle(
         destinationBundle,
-        message => emit('enrich', message, { provider: 'nuvio' })
+        message => emit('enrich', message, { provider: 'nuvio' }),
+        input.source
       )
     }
 

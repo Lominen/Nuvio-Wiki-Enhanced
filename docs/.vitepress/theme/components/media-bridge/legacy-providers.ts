@@ -55,6 +55,7 @@ const TRAKT_PAGE_CONCURRENCY = 4
 const SIMKL_PROGRESS_IMPORT_TIMEOUT_MS = 30_000
 const NUVIO_METADATA_BATCH_SIZE = 400
 const NUVIO_METADATA_BATCH_CONCURRENCY = 4
+const NUVIO_KITSU_SEARCH_CONCURRENCY = 6
 
 const SIMKL_EXTERNAL_ID_NAMESPACES = [
   'mal',
@@ -346,6 +347,39 @@ function firstExternalContentId(media: MediaRef): string | null {
   return null
 }
 
+function normalizedKitsuContentId(value: unknown): string | null {
+  const normalized = String(value ?? '').trim()
+  const match = /^kitsu:(\d+)$/i.exec(normalized)
+  if (!match) return null
+  const id = Number(match[1])
+  return Number.isSafeInteger(id) && id > 0 ? `kitsu:${id}` : null
+}
+
+function kitsuContentId(media: MediaRef): string | null {
+  const mappedVideoContentId = parseStremioVideoId(media.videoId)?.contentId
+  const fromMappedVideo = normalizedKitsuContentId(mappedVideoContentId)
+  if (fromMappedVideo) return fromMappedVideo
+
+  const external = normalizedKitsuContentId(`kitsu:${media.ids.external?.kitsu ?? ''}`)
+  if (external) return external
+
+  return normalizedKitsuContentId(media.ids.stremio)
+}
+
+function applyKitsuContentId(media: MediaRef, contentId: string): void {
+  const normalized = normalizedKitsuContentId(contentId)
+  if (!normalized) return
+  const rawId = normalized.slice('kitsu:'.length)
+  const numericId = Number(rawId)
+  media.ids = {
+    ...media.ids,
+    external: {
+      ...(media.ids.external || {}),
+      kitsu: Number.isSafeInteger(numericId) ? numericId : rawId
+    }
+  }
+}
+
 function normalizeIds(raw: any, slugService?: 'trakt' | 'simkl'): MediaIds {
   if (!raw || typeof raw !== 'object') return {}
   const ids: MediaIds = {}
@@ -407,6 +441,10 @@ function nuvioContentIds(media: MediaRef): string[] {
   const add = (value: string | null) => {
     if (value && !ids.includes(value)) ids.push(value)
   }
+  // When an enabled Nuvio addon resolves this title through Kitsu, retain that
+  // native catalog identity for both metadata lookup and the persisted row.
+  // IMDb remains canonical for every title that has no Kitsu resolution.
+  add(kitsuContentId(media))
   if (media.ids.imdb && /^tt\d+$/i.test(String(media.ids.imdb))) {
     add(String(media.ids.imdb).toLowerCase())
   }
@@ -657,7 +695,7 @@ async function ensureNuvioToken(connection: BridgeConnection): Promise<string> {
   return credentials.session.access_token
 }
 
-async function nuvioRpc(
+export async function nuvioRpc(
   connection: BridgeConnection,
   name: string,
   body: Record<string, any> = {}
@@ -676,7 +714,7 @@ async function nuvioRpc(
   return data
 }
 
-async function nuvioRest(
+export async function nuvioRest(
   connection: BridgeConnection,
   path: string,
   params: Record<string, any> = {}
@@ -747,7 +785,7 @@ async function simklRequest(
   }
 }
 
-async function stremioRequest(
+export async function stremioRequest(
   connection: BridgeConnection,
   path: string,
   body: Record<string, any>
@@ -2875,29 +2913,55 @@ async function loadBridgeMetadata(
 }
 
 /**
- * Enriches a canonical bundle through the existing Nuvio metadata endpoint.
- * The engine invokes this before planning a Nuvio destination so TMDB-only
- * records gain their corresponding IMDb alias without changing the wire
- * contract or moving credentials out of the browser.
+ * Enriches a canonical bundle through the existing Nuvio metadata endpoint
+ * and the selected profile's enabled Kitsu catalog. The engine invokes this
+ * before planning so TMDB-only records gain an IMDb alias and matching anime
+ * gain their native Kitsu identity without moving credentials out of the
+ * browser.
  */
 export async function enrichMediaBridgeBundle(
   input: CanonicalBundle,
-  log?: BridgeLog
+  log?: BridgeLog,
+  nuvioConnection?: BridgeConnection
 ): Promise<CanonicalBundle> {
   const bundle: CanonicalBundle = {
     history: input.history.map(record => ({
       ...record,
-      media: { ...record.media, ids: { ...record.media.ids } },
+      media: {
+        ...record.media,
+        ids: {
+          ...record.media.ids,
+          ...(record.media.ids.external
+            ? { external: { ...record.media.ids.external } }
+            : {})
+        }
+      },
       source: record.source ? { ...record.source } : undefined
     })),
     progress: input.progress.map(record => ({
       ...record,
-      media: { ...record.media, ids: { ...record.media.ids } },
+      media: {
+        ...record.media,
+        ids: {
+          ...record.media.ids,
+          ...(record.media.ids.external
+            ? { external: { ...record.media.ids.external } }
+            : {})
+        }
+      },
       source: record.source ? { ...record.source } : undefined
     })),
     library: input.library.map(record => ({
       ...record,
-      media: { ...record.media, ids: { ...record.media.ids } },
+      media: {
+        ...record.media,
+        ids: {
+          ...record.media.ids,
+          ...(record.media.ids.external
+            ? { external: { ...record.media.ids.external } }
+            : {})
+        }
+      },
       source: record.source ? { ...record.source } : undefined,
       lists: record.lists.map(list => ({ ...list }))
     }))
@@ -2906,6 +2970,13 @@ export async function enrichMediaBridgeBundle(
   const metadata = await loadBridgeMetadata(records.map(record => record.media), log)
   for (const record of records) {
     record.media = withResolvedExternalIds(record.media, metadata.get(record.media))
+  }
+  if (nuvioConnection?.service === 'nuvio') {
+    await enrichNuvioKitsuAliases(
+      nuvioConnection,
+      records.map(record => record.media),
+      log
+    )
   }
   return dedupeBundle(bundle)
 }
@@ -3614,6 +3685,100 @@ interface StremioVideo {
 }
 
 const cinemetaCache = new Map<string, Promise<any | null>>()
+const stremioKitsuAddonCache = new Map<string, Promise<Array<{
+  baseUrl: string
+  types: string[]
+}>>>()
+const stremioKitsuMetaCache = new Map<string, Promise<any | null>>()
+
+async function stremioKitsuMetadataAddons(
+  connection: BridgeConnection
+): Promise<Array<{ baseUrl: string; types: string[] }>> {
+  const cacheKey = connection.accountId
+  if (!stremioKitsuAddonCache.has(cacheKey)) {
+    stremioKitsuAddonCache.set(cacheKey, (async () => {
+      try {
+        const value = await stremioRequest(connection, '/addonCollectionGet', {
+          type: 'AddonCollectionGet',
+          update: false
+        })
+        const descriptors = Array.isArray(value)
+          ? value
+          : Array.isArray(value?.addons)
+            ? value.addons
+            : []
+        const addons: Array<{ baseUrl: string; types: string[] }> = []
+        for (const descriptor of descriptors) {
+          const manifest = descriptor?.manifest
+          const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
+          const metaResources = resources.filter((resource: any) => (
+            manifestResourceName(resource) === 'meta'
+          ))
+          if (!metaResources.length) continue
+
+          const manifestId = String(manifest?.id || '').trim().toLowerCase()
+          const prefixes = manifestIdPrefixes(manifest)
+          if (!prefixes.includes('kitsu') && !manifestId.includes('kitsu')) continue
+
+          const baseUrl = addonBaseUrl(descriptor?.transportUrl)
+          if (!baseUrl) continue
+          const types = [
+            ...(Array.isArray(manifest?.types) ? manifest.types : []),
+            ...metaResources.flatMap((resource: any) => (
+              Array.isArray(resource?.types) ? resource.types : []
+            ))
+          ]
+            .map(type => String(type || '').trim())
+            .filter(Boolean)
+          addons.push({ baseUrl, types: [...new Set(types)] })
+        }
+        return addons
+      } catch {
+        return []
+      }
+    })())
+  }
+  return stremioKitsuAddonCache.get(cacheKey)!
+}
+
+async function fetchStremioKitsuMeta(
+  connection: BridgeConnection,
+  media: MediaRef,
+  sourceType: unknown
+): Promise<any | null> {
+  const contentId = kitsuContentId(media)
+  if (!contentId) return null
+  const key = `${connection.accountId}:${contentId}`
+  if (!stremioKitsuMetaCache.has(key)) {
+    stremioKitsuMetaCache.set(key, (async () => {
+      const sourceTypeName = String(sourceType || '').trim()
+      for (const addon of await stremioKitsuMetadataAddons(connection)) {
+        const types = [...new Set([
+          'anime',
+          sourceTypeName,
+          ...addon.types,
+          media.kind === 'movie' ? 'movie' : 'series',
+          'tv'
+        ].filter(Boolean))]
+        for (const type of types) {
+          try {
+            const { data } = await requestBridgeJson(
+              addonResourceUrl(
+                addon.baseUrl,
+                `meta/${encodeURIComponent(type)}/${encodeURIComponent(contentId)}.json`
+              )
+            )
+            if (data?.meta) return data.meta
+          } catch {
+            // Try the next advertised type or installed Kitsu addon.
+          }
+        }
+      }
+      return null
+    })())
+  }
+  return stremioKitsuMetaCache.get(key)!
+}
 
 async function fetchCinemetaMeta(media: MediaRef): Promise<any | null> {
   const contentId = stremioContentId(media)
@@ -3626,6 +3791,20 @@ async function fetchCinemetaMeta(media: MediaRef): Promise<any | null> {
     ).then(response => response.data?.meta || null).catch(() => null))
   }
   return cinemetaCache.get(key)!
+}
+
+async function fetchStremioSeriesMeta(
+  connection: BridgeConnection,
+  media: MediaRef,
+  sourceType: unknown
+): Promise<any | null> {
+  // A Stremio watched bitfield is indexed against the episode ordering emitted
+  // by the metadata addon that owns the item. Never decode a native Kitsu item
+  // against Cinemeta merely because an IMDb alias was enriched later.
+  if (kitsuContentId(media)) {
+    return fetchStremioKitsuMeta(connection, media, sourceType)
+  }
+  return fetchCinemetaMeta(media)
 }
 
 function orderedStremioVideos(meta: any): StremioVideo[] {
@@ -3703,7 +3882,7 @@ async function pullStremio(options: PullOptions): Promise<PullResult> {
     let meta: any | null = null
     let videos: StremioVideo[] = []
     if (media.kind === 'series' && (state.watched || state.timeOffset > 0)) {
-      meta = await fetchCinemetaMeta(media)
+      meta = await fetchStremioSeriesMeta(connection, media, item?.type)
       videos = orderedStremioVideos(meta)
       if (meta?.name && !media.title) media.title = meta.name
     }
@@ -4057,19 +4236,92 @@ export interface DestinationMappingIssue {
   mapping: MappingOutcome
 }
 
+interface NuvioSearchCatalog {
+  id: string
+  type: string
+}
+
 interface NuvioMetaAddon {
   baseUrl: string
+  kitsuSearchCatalogs: NuvioSearchCatalog[]
 }
 
 const nuvioAddonCache = new Map<string, Promise<NuvioMetaAddon[]>>()
 const nuvioEpisodeCache = new Map<string, Promise<EpisodeRef[]>>()
 const traktTargetEpisodeCache = new Map<string, Promise<EpisodeRef[]>>()
+const nuvioKitsuSearchCache = new Map<string, Promise<string | null>>()
+
+export function invalidateNuvioMetadataCaches(connection: BridgeConnection): void {
+  const profileKey = `${connection.accountId}:${connection.profileId}`
+  nuvioAddonCache.delete(profileKey)
+  for (const key of nuvioEpisodeCache.keys()) {
+    if (key.startsWith(`${profileKey}:`)) nuvioEpisodeCache.delete(key)
+  }
+  for (const key of nuvioKitsuSearchCache.keys()) {
+    if (key.startsWith(`${profileKey}:`)) nuvioKitsuSearchCache.delete(key)
+  }
+}
 
 function addonBaseUrl(value: unknown): string {
-  return String(value || '')
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+    url.hash = ''
+    url.pathname = url.pathname
+      .replace(/\/manifest\.json\/?$/i, '')
+      .replace(/\/+$/, '') || '/'
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+function addonResourceUrl(baseUrl: string, resourcePath: string): string {
+  const url = new URL(baseUrl)
+  const basePath = url.pathname.replace(/\/+$/, '')
+  const suffix = String(resourcePath || '').replace(/^\/+/, '')
+  url.pathname = `${basePath}/${suffix}`
+  return url.toString()
+}
+
+function manifestResourceName(resource: unknown): string {
+  return String(typeof resource === 'string' ? resource : (resource as any)?.name || '')
     .trim()
-    .replace(/\/manifest\.json\/?$/i, '')
-    .replace(/\/+$/, '')
+    .toLowerCase()
+}
+
+function manifestIdPrefixes(manifest: any): string[] {
+  const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
+  return [
+    ...(Array.isArray(manifest?.idPrefixes) ? manifest.idPrefixes : []),
+    ...resources.flatMap((resource: any) => (
+      Array.isArray(resource?.idPrefixes) ? resource.idPrefixes : []
+    ))
+  ].map(value => String(value || '').trim().toLowerCase().replace(/:$/, ''))
+}
+
+function kitsuSearchCatalogs(manifest: any): NuvioSearchCatalog[] {
+  const prefixes = manifestIdPrefixes(manifest)
+  const manifestId = String(manifest?.id || '').trim().toLowerCase()
+  const declaresKitsu = prefixes.includes('kitsu') || manifestId.includes('kitsu')
+  if (!declaresKitsu) return []
+
+  return (Array.isArray(manifest?.catalogs) ? manifest.catalogs : [])
+    .filter((catalog: any) => (
+      catalog
+      && String(catalog.id || '').trim()
+      && String(catalog.type || '').trim()
+      && Array.isArray(catalog.extra)
+      && catalog.extra.some((extra: any) => (
+        String(typeof extra === 'string' ? extra : extra?.name || '').trim().toLowerCase() === 'search'
+      ))
+    ))
+    .map((catalog: any) => ({
+      id: String(catalog.id).trim(),
+      type: String(catalog.type).trim()
+    }))
 }
 
 async function nuvioMetadataAddons(connection: BridgeConnection): Promise<NuvioMetaAddon[]> {
@@ -4085,12 +4337,18 @@ async function nuvioMetadataAddons(connection: BridgeConnection): Promise<NuvioM
       for (const row of Array.isArray(rows) ? rows : []) {
         if (!row?.url || row.enabled === false) continue
         const baseUrl = addonBaseUrl(row.url)
+        if (!baseUrl) continue
         try {
-          const manifest = (await requestBridgeJson(`${baseUrl}/manifest.json`)).data
+          const manifest = (await requestBridgeJson(
+            addonResourceUrl(baseUrl, 'manifest.json')
+          )).data
           const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
-          if (resources.some((resource: any) => (
-            (typeof resource === 'string' ? resource : resource?.name) === 'meta'
-          ))) addons.push({ baseUrl })
+          if (resources.some((resource: any) => manifestResourceName(resource) === 'meta')) {
+            addons.push({
+              baseUrl,
+              kitsuSearchCatalogs: kitsuSearchCatalogs(manifest)
+            })
+          }
         } catch {
           // Try the next enabled addon.
         }
@@ -4101,13 +4359,213 @@ async function nuvioMetadataAddons(connection: BridgeConnection): Promise<NuvioM
   return nuvioAddonCache.get(cacheKey)!
 }
 
+function metadataYear(value: any): number | null {
+  for (const candidate of [
+    value?.year,
+    value?.releaseInfo,
+    value?.release_info,
+    value?.released
+  ]) {
+    const match = /(?:^|\D)((?:19|20)\d{2})(?:\D|$)/.exec(String(candidate ?? ''))
+    const year = Number(match?.[1])
+    if (Number.isInteger(year) && year > 0) return year
+  }
+  return null
+}
+
+function metadataTitles(value: any): string[] {
+  const titles = [
+    value?.name,
+    value?.title,
+    ...(Array.isArray(value?.aliases) ? value.aliases : []),
+    ...Object.values(value?.titles || {}),
+    ...Object.values(value?.alternativeTitles || {})
+  ]
+  return [...new Set(titles.map(title => normalizeTitle(title)).filter(Boolean))]
+}
+
+interface KitsuSearchCandidate {
+  contentId: string
+  year: number | null
+  titleMatch: boolean
+}
+
+function kitsuSearchCandidates(
+  metas: readonly any[],
+  media: MediaRef
+): KitsuSearchCandidate[] {
+  const title = normalizeTitle(media.title)
+  const matches = new Map<string, KitsuSearchCandidate>()
+  for (const meta of metas) {
+    const contentId = normalizedKitsuContentId(meta?.id)
+    if (!contentId) continue
+    const current = matches.get(contentId)
+    const year = metadataYear(meta)
+    matches.set(contentId, {
+      contentId,
+      year: current?.year ?? year,
+      titleMatch: Boolean(current?.titleMatch || (title && metadataTitles(meta).includes(title)))
+    })
+  }
+  return [...matches.values()]
+}
+
+function normalizedImdbContentId(value: unknown): string | null {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return /^tt\d+$/.test(normalized) ? normalized : null
+}
+
+function metadataImdbContentId(meta: any): string | null {
+  return normalizedImdbContentId(
+    meta?.imdb_id
+    || meta?.imdbId
+    || meta?.ids?.imdb
+    || meta?.externalIds?.imdb
+  )
+}
+
+async function verifyKitsuCandidateImdb(
+  addon: NuvioMetaAddon,
+  catalog: NuvioSearchCatalog,
+  candidate: KitsuSearchCandidate,
+  media: MediaRef
+): Promise<boolean | null> {
+  const sourceImdb = normalizedImdbContentId(media.ids.imdb)
+  if (!sourceImdb) return null
+  try {
+    const { data } = await requestBridgeJson(
+      addonResourceUrl(
+        addon.baseUrl,
+        `meta/${encodeURIComponent(catalog.type)}/${encodeURIComponent(candidate.contentId)}.json`
+      )
+    )
+    const candidateImdb = metadataImdbContentId(data?.meta)
+    return candidateImdb ? candidateImdb === sourceImdb : null
+  } catch {
+    return null
+  }
+}
+
+async function resolveNuvioKitsuContentId(
+  connection: BridgeConnection,
+  media: MediaRef
+): Promise<string | null> {
+  const existing = kitsuContentId(media)
+  if (existing) return existing
+  const title = normalizeTitle(media.title)
+  if (media.kind !== 'series' || !title) return null
+
+  const year = Number.isInteger(media.year) ? Number(media.year) : 0
+  const key = `${connection.accountId}:${connection.profileId}:${
+    [
+      title,
+      year,
+      mediaAliasKeys(media).join(',')
+    ].map(value => encodeURIComponent(String(value ?? ''))).join(':')
+  }`
+  if (!nuvioKitsuSearchCache.has(key)) {
+    nuvioKitsuSearchCache.set(key, (async () => {
+      const verified = new Set<string>()
+      const exactYearFallback = new Set<string>()
+      const unknownYearFallback = new Set<string>()
+      const unqualifiedFallback = new Set<string>()
+      const sourceYear = Number(media.year)
+      for (const addon of await nuvioMetadataAddons(connection)) {
+        for (const catalog of addon.kitsuSearchCatalogs) {
+          try {
+            const { data } = await requestBridgeJson(
+              addonResourceUrl(
+                addon.baseUrl,
+                `catalog/${encodeURIComponent(catalog.type)}`
+                + `/${encodeURIComponent(catalog.id)}`
+                + `/search=${encodeURIComponent(String(media.title || '').trim())}.json`
+              )
+            )
+            for (const candidate of kitsuSearchCandidates(
+              Array.isArray(data?.metas) ? data.metas : [],
+              media
+            )) {
+              const imdbMatch = await verifyKitsuCandidateImdb(
+                addon,
+                catalog,
+                candidate,
+                media
+              )
+              if (imdbMatch === true) {
+                verified.add(candidate.contentId)
+                continue
+              }
+              if (imdbMatch === false) continue
+              // Without an IMDb assertion from the addon, require the catalog
+              // result itself to match the normalized source title exactly.
+              if (!candidate.titleMatch) continue
+              if (!Number.isInteger(sourceYear) || sourceYear <= 0) {
+                unqualifiedFallback.add(candidate.contentId)
+              } else if (candidate.year === sourceYear) {
+                exactYearFallback.add(candidate.contentId)
+              } else if (candidate.year === null) {
+                unknownYearFallback.add(candidate.contentId)
+              }
+            }
+          } catch {
+            // Try every enabled Kitsu search catalog before declaring no match.
+          }
+        }
+      }
+      if (verified.size) return verified.size === 1 ? [...verified][0] : null
+      if (exactYearFallback.size) {
+        return exactYearFallback.size === 1 ? [...exactYearFallback][0] : null
+      }
+      if (unknownYearFallback.size) {
+        return unknownYearFallback.size === 1 ? [...unknownYearFallback][0] : null
+      }
+      return unqualifiedFallback.size === 1 ? [...unqualifiedFallback][0] : null
+    })())
+  }
+  return nuvioKitsuSearchCache.get(key)!
+}
+
+async function enrichNuvioKitsuAliases(
+  connection: BridgeConnection,
+  mediaRefs: readonly MediaRef[],
+  log?: BridgeLog
+): Promise<void> {
+  const groups = new Map<string, MediaRef[]>()
+  for (const media of mediaRefs) {
+    if (media.kind !== 'series') continue
+    const title = normalizeTitle(media.title)
+    if (!title) continue
+    const identity = mediaAliasKeys(media)[0]
+      || `series:title:${title}:${Number.isInteger(media.year) ? media.year : ''}`
+    const group = groups.get(identity)
+    if (group) group.push(media)
+    else groups.set(identity, [media])
+  }
+  if (!groups.size) return
+
+  let resolvedCount = 0
+  await mapLimit([...groups.values()], NUVIO_KITSU_SEARCH_CONCURRENCY, async group => {
+    const existing = group.map(kitsuContentId).find(Boolean) || null
+    const contentId = existing || await resolveNuvioKitsuContentId(connection, group[0])
+    if (!contentId) return
+    for (const media of group) applyKitsuContentId(media, contentId)
+    if (!existing) resolvedCount++
+  })
+  if (resolvedCount) {
+    logTo(
+      log,
+      `Resolved ${resolvedCount} anime title${resolvedCount === 1 ? '' : 's'} through enabled Kitsu catalogs.`
+    )
+  }
+}
+
 async function nuvioTargetEpisodes(
   connection: BridgeConnection,
   media: MediaRef
 ): Promise<EpisodeRef[]> {
-  const contentId = nuvioContentId(media)
-  if (!contentId) return []
-  const key = `${connection.accountId}:${connection.profileId}:${contentId}`
+  const contentIds = nuvioContentIds(media)
+  if (!contentIds.length) return []
+  const key = `${connection.accountId}:${connection.profileId}:${contentIds.join('|')}`
   if (!nuvioEpisodeCache.has(key)) {
     nuvioEpisodeCache.set(key, (async () => {
       const addons = await nuvioMetadataAddons(connection)
@@ -4117,23 +4575,29 @@ async function nuvioTargetEpisodes(
         const normalized = String(value ?? '').trim()
         if (normalized && !candidates.includes(normalized)) candidates.push(normalized)
       }
-      for (const id of nuvioContentIds(media)) {
-        // nuvioContentIds is deliberately IMDb-first. Keep the canonical ID
+      for (const id of contentIds) {
+        // Keep the resolved native Kitsu identity (or canonical IMDb fallback)
         // first, then try the bare provider value for addons that do not accept
-        // namespaced TMDB/TVDB/Trakt/Simkl IDs.
+        // namespaced provider IDs.
         addCandidate(id)
-        addCandidate(id.replace(/^(tmdb|tvdb|trakt|simkl):/i, ''))
+        addCandidate(id.replace(/^(tmdb|tvdb|trakt|simkl|kitsu):/i, ''))
       }
       // Try the preferred ID across every addon before falling back to the next
-      // namespace. This keeps IMDb canonical even when an earlier addon could
-      // answer only for TMDB while a later addon supports IMDb.
+      // namespace. This keeps the selected native catalog identity stable even
+      // when an earlier addon can answer only for a lower-priority alias.
       for (const candidate of candidates) {
         for (const addon of addons) {
-          for (const type of ['series', 'tv']) {
-            try {
-              const { data } = await requestBridgeJson(
-                `${addon.baseUrl}/meta/${type}/${encodeURIComponent(candidate)}.json`
-              )
+          const types = normalizedKitsuContentId(candidate)
+            ? ['anime', 'series', 'tv']
+            : ['series', 'tv', 'anime']
+          for (const type of types) {
+              try {
+                const { data } = await requestBridgeJson(
+                  addonResourceUrl(
+                    addon.baseUrl,
+                    `meta/${type}/${encodeURIComponent(candidate)}.json`
+                  )
+                )
               const videos = orderedStremioVideos(data?.meta)
               if (videos.length) return episodeRefs(videos)
             } catch {

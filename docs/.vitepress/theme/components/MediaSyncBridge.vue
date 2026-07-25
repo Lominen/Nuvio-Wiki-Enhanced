@@ -49,20 +49,38 @@ import {
 } from './mediaBridgeProviders'
 import { mediaBridgeEngine } from './media-bridge/engine'
 import { parseTraktExportZip } from './media-bridge/trakt-export'
+import {
+  migrateStremioNuvioAddons,
+  previewStremioNuvioAddons,
+  type StremioNuvioAddonMigrationResult,
+  type StremioNuvioAddonPlan
+} from './stremioNuvioMigration'
 
 const props = withDefaults(defineProps<{
   defaultExpanded?: boolean
   hideTip?: boolean
   hideHeader?: boolean
+  sourceService?: ServiceId
+  destinationService?: ServiceId
+  lockRoute?: boolean
+  enableAddonMigration?: boolean
+  defaultAddonMigrationSelected?: boolean
+  migrationMode?: boolean
 }>(), {
   defaultExpanded: false,
   hideTip: false,
-  hideHeader: false
+  hideHeader: false,
+  sourceService: 'trakt',
+  destinationService: 'nuvio',
+  lockRoute: false,
+  enableAddonMigration: false,
+  defaultAddonMigrationSelected: false,
+  migrationMode: false
 })
 
 const { lang } = useData()
 const isDutch = computed(() => String(lang.value || '').startsWith('nl'))
-const copy = computed(() => isDutch.value ? {
+const syncCopy = computed(() => isDutch.value ? {
   title: 'Sync Bridge',
   subtitle: 'Verplaats kijkgeschiedenis, voortgang en opgeslagen titels tussen Simkl, Stremio, Trakt, Plex, Jellyfin en Nuvio.',
   info: 'Koppel een bron en bestemming en start direct met synchroniseren. Een voorbeeld bekijken is optioneel. Bestaande bestemmingsgegevens blijven behouden.',
@@ -91,6 +109,15 @@ const copy = computed(() => isDutch.value ? {
   progressHelp: 'De nieuwste actieve afspeelpositie',
   library: 'Opgeslagen titels',
   libraryHelp: 'Watchlist, collectie of bibliotheek',
+  addons: 'Add-ons',
+  addonsHelp: 'Geïnstalleerde Stremio-add-ons die Nuvio kan bereiken',
+  addonPrivacy: 'Add-on-URL’s kunnen persoonlijke configuratietokens bevatten. Als je dit inschakelt, worden ze rechtstreeks van Stremio naar je Nuvio-profiel gekopieerd en nooit door deze site opgeslagen.',
+  addonPreviewTitle: 'Add-onmigratie',
+  addonSource: 'Stremio-add-ons',
+  addonNew: 'Nieuw voor Nuvio',
+  addonKept: 'Nuvio behouden',
+  addonSkipped: 'Overgeslagen',
+  addonsUnit: 'add-ons',
   preview: 'Wijzigingen bekijken',
   previewing: 'Gegevens vergelijken…',
   sync: 'Synchronisatie uitvoeren',
@@ -199,6 +226,15 @@ const copy = computed(() => isDutch.value ? {
   progressHelp: 'The newest active playback position',
   library: 'Saved titles',
   libraryHelp: 'Watchlist, collection, or library membership',
+  addons: 'Add-ons',
+  addonsHelp: 'Installed Stremio add-ons that Nuvio can reach',
+  addonPrivacy: 'Add-on URLs can contain private configuration tokens. When enabled, they are copied directly from Stremio to your Nuvio profile and are never stored by this site.',
+  addonPreviewTitle: 'Add-on migration',
+  addonSource: 'Stremio add-ons',
+  addonNew: 'New to Nuvio',
+  addonKept: 'Nuvio kept',
+  addonSkipped: 'Skipped',
+  addonsUnit: 'add-ons',
   preview: 'Preview changes',
   previewing: 'Comparing data…',
   sync: 'Run sync',
@@ -280,6 +316,75 @@ const copy = computed(() => isDutch.value ? {
   supportButton: 'Support me on Ko-fi'
 })
 
+const copy = computed(() => {
+  const base = syncCopy.value
+  if (!props.migrationMode) return base
+
+  return isDutch.value ? {
+    ...base,
+    source: 'Van Stremio',
+    destination: 'Naar Nuvio',
+    connected: 'Klaar',
+    scopes: 'Kies wat je wilt meenemen',
+    preview: 'Migratie controleren',
+    previewing: 'Migratievoorbeeld maken…',
+    sync: 'Migreren naar Nuvio',
+    syncing: 'Migreren…',
+    reset: 'Voorbeeld wissen',
+    sourceItems: 'Stremio-items',
+    previewTitle: 'Migratievoorbeeld',
+    activity: 'Migratieactiviteit',
+    result: 'Migratie voltooid',
+    resultWarnings: 'Migratie voltooid met meldingen',
+    finishedWarnings: 'Migratie voltooid met meldingen.',
+    secureShort: 'De migratie draait lokaal in je browser',
+    secure: 'Je inloggegevens en migratiedata blijven in dit browsertabblad. Ze gaan rechtstreeks naar Stremio en Nuvio en worden nooit door deze site opgeslagen.',
+    caveat: 'Je bestaande Nuvio-gegevens blijven behouden. Alleen ontbrekende of nieuwere status uit Stremio wordt toegevoegd of bijgewerkt; herhaalde afspeelbeurten worden samengevoegd tot de nieuwste bekeken status.',
+    setupStopped: 'Migratie instellen gestopt',
+    noChanges: 'Nuvio is al bijgewerkt voor de gekozen onderdelen.',
+    syncPlan: 'Inhoud van de migratie',
+    providerNotes: 'Migratiemeldingen',
+    preparingSync: 'Je migratie voorbereiden…',
+    verifyingSync: 'Nuvio controleren…',
+    keepOpen: 'Laat deze pagina open terwijl je gegevens worden vergeleken, gemigreerd en gecontroleerd.',
+    syncFailed: 'Migratie mislukt',
+    backToBridge: 'Terug naar migratie',
+    syncNotes: 'Migratiemeldingen',
+    syncNotesIntro: 'De migratie is voltooid. Deze meldingen leggen uit welke items zijn overgeslagen of niet konden worden gecontroleerd.'
+  } : {
+    ...base,
+    source: 'From Stremio',
+    destination: 'To Nuvio',
+    connected: 'Ready',
+    scopes: 'Choose what to bring',
+    preview: 'Review migration',
+    previewing: 'Preparing migration preview…',
+    sync: 'Migrate to Nuvio',
+    syncing: 'Migrating…',
+    reset: 'Clear preview',
+    sourceItems: 'Stremio items',
+    previewTitle: 'Migration preview',
+    activity: 'Migration activity',
+    result: 'Migration complete',
+    resultWarnings: 'Migration complete with notes',
+    finishedWarnings: 'Migration complete with notes.',
+    secureShort: 'Migration runs locally in your browser',
+    secure: 'Your sign-in details and migration data stay in this browser tab. They go directly to Stremio and Nuvio and are never stored by this site.',
+    caveat: 'Your existing Nuvio data is kept. Only missing or newer state from Stremio is added or updated; repeated plays are combined into the latest watched state.',
+    setupStopped: 'Migration setup stopped',
+    noChanges: 'Nuvio is already up to date for the selected categories.',
+    syncPlan: 'Migration contents',
+    providerNotes: 'Migration notes',
+    preparingSync: 'Preparing your migration…',
+    verifyingSync: 'Checking Nuvio…',
+    keepOpen: 'Keep this page open while your data is compared, migrated, and checked.',
+    syncFailed: 'Migration failed',
+    backToBridge: 'Back to migration',
+    syncNotes: 'Migration notes',
+    syncNotesIntro: 'The migration completed. These notes explain items that were skipped or could not be checked.'
+  }
+})
+
 const bridgeSlots: readonly BridgeSlot[] = ['source', 'destination']
 const SERVICE_LOGOS: Record<ServiceId, string> = {
   simkl: '/service-logos/simkl.ico',
@@ -291,8 +396,8 @@ const SERVICE_LOGOS: Record<ServiceId, string> = {
 }
 const isCollapsed = ref(!props.defaultExpanded)
 const selectedService = reactive<Record<BridgeSlot, ServiceId>>({
-  source: 'trakt',
-  destination: 'nuvio'
+  source: props.sourceService,
+  destination: props.destinationService
 })
 const connections = reactive<Record<BridgeSlot, BridgeConnection | null>>({
   source: null,
@@ -314,12 +419,20 @@ const stremioLinkAttempt = reactive<Record<BridgeSlot, number>>({ source: 0, des
 const plexLinks = reactive<Record<BridgeSlot, PlexPinLink | null>>({ source: null, destination: null })
 const plexLinkAttempt = reactive<Record<BridgeSlot, number>>({ source: 0, destination: 0 })
 const scopes = reactive<SyncScopes>({ history: true, progress: true, library: true })
+const addonMigrationSelected = ref(props.defaultAddonMigrationSelected)
 const globalError = ref('')
 const statusMessage = ref('')
 const actionBusy = ref<'preview' | 'sync' | null>(null)
 const preview = ref<MediaBridgePreviewPlan | null>(null)
+const addonPreview = ref<StremioNuvioAddonPlan | null>(null)
+const addonResult = ref<StremioNuvioAddonMigrationResult | null>(null)
 const previewSignature = ref('')
 const providerIssues = ref<BridgeIssue[]>([])
+const extraMigrationIssues = ref<Array<{
+  label: string
+  status: 'warning' | 'note'
+  reason: string
+}>>([])
 const syncResult = ref<PushResult | null>(null)
 const activity = ref<string[]>([])
 const syncViewOpen = ref(false)
@@ -360,6 +473,17 @@ const effectiveScopes = computed<SyncScopes>(() => ({
   library: scopes.library && routeScopeSupport.value.library
 }))
 const enabledScopeCount = computed(() => Object.values(effectiveScopes.value).filter(Boolean).length)
+const addonScopeSupported = computed(() => Boolean(
+  props.enableAddonMigration
+  && selectedService.source === 'stremio'
+  && selectedService.destination === 'nuvio'
+))
+const effectiveAddonMigration = computed(() => (
+  addonScopeSupported.value && addonMigrationSelected.value
+))
+const enabledMigrationScopeCount = computed(() => (
+  enabledScopeCount.value + (effectiveAddonMigration.value ? 1 : 0)
+))
 const routeLocked = computed(() => Boolean(
   actionBusy.value || connectionBusy.source || connectionBusy.destination
 ))
@@ -367,7 +491,8 @@ const currentSignature = computed(() => JSON.stringify({
   source: endpointFingerprint(connections.source),
   destination: endpointFingerprint(connections.destination),
   services: selectedService,
-  scopes: effectiveScopes.value
+  scopes: effectiveScopes.value,
+  addons: effectiveAddonMigration.value
 }))
 const transferCount = computed(() => preview.value
   ? preview.value.transfer.history.length
@@ -377,14 +502,20 @@ const transferCount = computed(() => preview.value
 )
 const canPreview = computed(() => (
   endpointValidation.value.valid
-  && enabledScopeCount.value > 0
+  && enabledMigrationScopeCount.value > 0
   && !actionBusy.value
 ))
 const canSync = computed(() => canPreview.value)
 const syncHasWarnings = computed(() => Boolean(
-  syncResult.value && providerIssues.value.some(issue => issue.status !== 'note')
+  syncResult.value && (
+    providerIssues.value.some(issue => issue.status !== 'note')
+    || extraMigrationIssues.value.some(issue => issue.status === 'warning')
+  )
 ))
-const syncHasNotes = computed(() => Boolean(syncResult.value && providerIssues.value.length))
+const syncHasNotes = computed(() => Boolean(
+  syncResult.value && (providerIssues.value.length || extraMigrationIssues.value.length)
+))
+const syncNoteCount = computed(() => providerIssues.value.length + extraMigrationIssues.value.length)
 const finishedIssueGroups = computed(() => {
   const groups = new Map<string, BridgeIssue & { count: number; mediaLabels: string[] }>()
   for (const issue of providerIssues.value) {
@@ -454,6 +585,7 @@ function serviceLogo(service: ServiceId) {
 }
 
 function servicesForSlot(slot: BridgeSlot) {
+  if (props.lockRoute) return [selectedService[slot]]
   return serviceIdsForSlot(slot)
 }
 
@@ -498,8 +630,11 @@ function closeSyncView() {
 
 function clearPreview() {
   preview.value = null
+  addonPreview.value = null
+  addonResult.value = null
   previewSignature.value = ''
   providerIssues.value = []
+  extraMigrationIssues.value = []
   syncResult.value = null
   previewPage.value = 1
 }
@@ -909,6 +1044,22 @@ function appendIssueLogs(issues: readonly BridgeIssue[]) {
   }
 }
 
+function recordAddonSkips(plan: StremioNuvioAddonPlan) {
+  const grouped = new Map<string, number>()
+  for (const skipped of plan.skipped) {
+    grouped.set(skipped.reason, (grouped.get(skipped.reason) || 0) + 1)
+  }
+  for (const [reason, count] of grouped) {
+    const message = `${count} Stremio add-on${count === 1 ? '' : 's'} skipped. ${reason}`
+    extraMigrationIssues.value.push({
+      label: copy.value.addons,
+      status: 'note',
+      reason: message
+    })
+    appendLog(`Note add-ons: ${message}`)
+  }
+}
+
 function planTransferCount(plan: MediaBridgePreviewPlan) {
   return plan.transfer.history.length
     + plan.transfer.progress.length
@@ -925,19 +1076,33 @@ async function buildPreview() {
   statusMessage.value = copy.value.previewing
   activity.value = []
   syncResult.value = null
+  addonResult.value = null
+  extraMigrationIssues.value = []
   appendLog(`Preparing ${routeName.value}.`)
   try {
-    const prepared = await preparePlan(sourceConnection, destinationConnection, requestedScopes)
-    preview.value = prepared.plan
-    providerIssues.value = prepared.issues
-    appendIssueLogs(prepared.issues)
+    const [prepared, plannedAddons] = await Promise.all([
+      enabledScopeCount.value
+        ? preparePlan(sourceConnection, destinationConnection, requestedScopes)
+        : Promise.resolve(null),
+      effectiveAddonMigration.value
+        ? previewStremioNuvioAddons(sourceConnection, destinationConnection)
+        : Promise.resolve(null)
+    ])
+    preview.value = prepared?.plan || null
+    addonPreview.value = plannedAddons
+    providerIssues.value = prepared?.issues || []
+    appendIssueLogs(providerIssues.value)
+    if (plannedAddons) recordAddonSkips(plannedAddons)
     previewSignature.value = currentSignature.value
     previewPage.value = 1
-    const changes = planTransferCount(prepared.plan)
-    appendLog(`Preview ready: ${changes} changes, ${prepared.plan.stats.skipped} mapping skips.`)
+    const changes = (prepared ? planTransferCount(prepared.plan) : 0)
+      + (plannedAddons?.additions.length || 0)
+    const mappingSkips = prepared?.plan.stats.skipped || 0
+    appendLog(`Preview ready: ${changes} changes, ${mappingSkips} mapping skips.`)
     statusMessage.value = `${changes} changes ready to review.`
   } catch (error: any) {
     preview.value = null
+    addonPreview.value = null
     previewSignature.value = ''
     globalError.value = error.message
     appendLog(`Preview failed: ${error.message}`)
@@ -957,39 +1122,92 @@ async function runSync() {
   globalError.value = ''
   syncResult.value = null
   providerIssues.value = []
+  extraMigrationIssues.value = []
   preview.value = null
+  addonPreview.value = null
+  addonResult.value = null
   activity.value = []
   statusMessage.value = copy.value.preparingSync
   openSyncView()
   appendLog(`Comparing source and destination for ${routeName.value}...`)
   try {
-    // The engine always takes fresh snapshots. Preview stays optional and no
-    // stale append-only history plan can be reused by a later run.
-    const result = await mediaBridgeEngine.run({
-      source: sourceConnection,
-      destination: destinationConnection,
-      scopes: requestedScopes,
-      log: appendLog,
-      onEvent(event) {
-        if (event.phase === 'write') statusMessage.value = copy.value.syncing
-        if (event.phase === 'verify') statusMessage.value = copy.value.verifyingSync
+    let result: PushResult = {
+      written: { history: 0, progress: 0, library: 0 },
+      issues: [],
+      confirmedScopes: []
+    }
+    let canonicalChanges = 0
+    let completedParts = 0
+    const failures: string[] = []
+
+    // Install explicitly selected add-ons first so the fresh media comparison
+    // can use newly available metadata (notably native Kitsu episode ordering).
+    if (effectiveAddonMigration.value) {
+      try {
+        statusMessage.value = `Migrating ${copy.value.addons.toLowerCase()}…`
+        addonResult.value = await migrateStremioNuvioAddons(
+          sourceConnection,
+          destinationConnection
+        )
+        recordAddonSkips(addonResult.value.plan)
+        completedParts++
+        appendLog(`Add-on migration finished. Added ${addonResult.value.written} and preserved ${addonResult.value.plan.destinationCount} existing Nuvio add-ons.`)
+      } catch (error: any) {
+        const reason = error?.message || 'Add-on migration failed.'
+        failures.push(reason)
+        extraMigrationIssues.value.push({
+          label: copy.value.addons,
+          status: 'warning',
+          reason
+        })
+        appendLog(`Add-on migration failed: ${reason}`)
       }
-    })
-    const prepared = result.prepared
-    providerIssues.value = [...prepared.issues, ...result.issues]
-    appendIssueLogs(prepared.issues)
-    appendIssueLogs(result.issues)
-    const changes = planTransferCount(prepared.plan)
-    appendLog(`Comparison complete: ${changes} changes are ready; ${prepared.plan.stats.skipped} items were skipped.`)
-    if (changes === 0) {
-      syncResult.value = result
-      statusMessage.value = copy.value.noChanges
-      return
     }
 
+    if (enabledScopeCount.value) {
+      try {
+        // The engine always takes fresh snapshots. Preview stays optional and no
+        // stale append-only history plan can be reused by a later run.
+        const engineResult = await mediaBridgeEngine.run({
+          source: sourceConnection,
+          destination: destinationConnection,
+          scopes: requestedScopes,
+          log: appendLog,
+          onEvent(event) {
+            if (event.phase === 'write') statusMessage.value = copy.value.syncing
+            if (event.phase === 'verify') statusMessage.value = copy.value.verifyingSync
+          }
+        })
+        result = engineResult
+        const prepared = engineResult.prepared
+        providerIssues.value = [...prepared.issues, ...engineResult.issues]
+        appendIssueLogs(prepared.issues)
+        appendIssueLogs(engineResult.issues)
+        canonicalChanges = planTransferCount(prepared.plan)
+        completedParts++
+        appendLog(`Comparison complete: ${canonicalChanges} changes are ready; ${prepared.plan.stats.skipped} items were skipped.`)
+      } catch (error: any) {
+        const reason = error?.message || 'Media migration failed.'
+        failures.push(reason)
+        extraMigrationIssues.value.push({
+          label: `${copy.value.history}, ${copy.value.progress}, ${copy.value.library}`,
+          status: 'warning',
+          reason
+        })
+        appendLog(`Media migration failed: ${reason}`)
+      }
+    }
+
+    if (!completedParts && failures.length) throw new Error(failures.join(' '))
     syncResult.value = result
-    appendLog(`Sync finished. Wrote ${result.written.history} history, ${result.written.progress} progress, and ${result.written.library} saved-title records.`)
-    statusMessage.value = syncHasWarnings.value ? copy.value.finishedWarnings : copy.value.result
+
+    const changes = canonicalChanges + (addonResult.value?.written || 0)
+    appendLog(`Sync finished. Wrote ${result.written.history} history, ${result.written.progress} progress, ${result.written.library} saved-title, and ${addonResult.value?.written || 0} add-on records.`)
+    statusMessage.value = changes === 0 && !syncHasWarnings.value
+      ? copy.value.noChanges
+      : syncHasWarnings.value
+        ? copy.value.finishedWarnings
+        : copy.value.result
   } catch (error: any) {
     globalError.value = error.message
     appendLog(`Sync failed: ${error.message}`)
@@ -1049,13 +1267,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="bridge-wrapper">
+  <div :class="['bridge-wrapper', { 'is-migration': props.migrationMode }]">
     <div v-if="!hideTip" class="custom-block tip bridge-tip">
       <p class="custom-block-title">INFO</p>
       <p>{{ copy.info }}</p>
     </div>
 
-    <section class="sync-bridge border-base" :class="{ 'is-expanded': !isCollapsed, 'is-standalone': hideHeader }">
+    <section
+      class="sync-bridge border-base"
+      :class="{
+        'is-expanded': !isCollapsed,
+        'is-standalone': hideHeader,
+        'is-migration': props.migrationMode
+      }"
+    >
       <button
         v-if="!hideHeader"
         class="bridge-header"
@@ -1109,7 +1334,7 @@ onBeforeUnmount(() => {
               <span v-if="connections[slot]" class="connected-badge">{{ copy.connected }}</span>
             </div>
 
-            <label class="service-picker" :for="`bridge-${slot}-service`">
+            <label v-if="!props.migrationMode" class="service-picker" :for="`bridge-${slot}-service`">
               <span class="sr-only">{{ copy.chooseService }}: {{ slotLabel(slot) }}</span>
               <span class="service-select-shell">
                 <img
@@ -1123,7 +1348,7 @@ onBeforeUnmount(() => {
                   :name="`${slot}-service`"
                   :value="selectedService[slot]"
                   :aria-label="`${copy.chooseService}: ${slotLabel(slot)}`"
-                  :disabled="routeLocked"
+                  :disabled="routeLocked || props.lockRoute"
                   @change="handleServiceChange(slot, $event)"
                 >
                   <option v-for="service in servicesForSlot(slot)" :key="service" :value="service">
@@ -1135,6 +1360,14 @@ onBeforeUnmount(() => {
                 </svg>
               </span>
             </label>
+            <div v-else class="fixed-service" aria-hidden="true">
+              <img
+                :src="serviceLogo(selectedService[slot])"
+                class="service-logo"
+                alt=""
+              />
+              <strong>{{ SERVICE_DEFINITIONS[selectedService[slot]].label }}</strong>
+            </div>
 
             <div v-if="slot === 'destination' && selectedService[slot] === 'simkl'" class="provider-access-note">
               <p>{{ copy.simklImportAccess }}</p>
@@ -1409,7 +1642,7 @@ onBeforeUnmount(() => {
             <span class="step-number">3</span>
             <div><span class="eyebrow">{{ copy.syncPlan }}</span><strong id="bridge-scope-title">{{ copy.scopes }}</strong></div>
           </div>
-          <div class="scope-grid">
+          <div :class="['scope-grid', { 'scope-grid--addons': props.enableAddonMigration }]">
             <label
               v-for="scope in (['history', 'progress', 'library'] as const)"
               :key="scope"
@@ -1426,20 +1659,38 @@ onBeforeUnmount(() => {
               </span>
               <span><strong>{{ copy[scope] }}</strong><small>{{ copy[`${scope}Help` as keyof typeof copy] }}</small></span>
             </label>
+            <label
+              v-if="props.enableAddonMigration"
+              :class="['scope-option', { 'is-unsupported': !addonScopeSupported }]"
+            >
+              <input
+                v-model="addonMigrationSelected"
+                type="checkbox"
+                :disabled="routeLocked || !addonScopeSupported"
+                @change="clearPreview"
+              />
+              <span class="check-box" aria-hidden="true">
+                <svg viewBox="0 0 16 16"><path d="m3 8 3 3 7-7" /></svg>
+              </span>
+              <span><strong>{{ copy.addons }}</strong><small>{{ copy.addonsHelp }}</small></span>
+            </label>
           </div>
+          <p v-if="props.enableAddonMigration" class="addon-privacy-note">
+            <strong>{{ copy.addons }}:</strong> {{ copy.addonPrivacy }}
+          </p>
           <p class="caveat-note">{{ copy.caveat }}</p>
         </section>
 
         <div class="bridge-actions">
           <button type="button" class="primary-button" :disabled="!canSync" @click="runSync">
             <span v-if="actionBusy === 'sync'" class="spinner" aria-hidden="true"></span>
-            {{ actionBusy === 'sync' ? copy.syncing : `${copy.sync}: ${routeName}` }}
+            {{ actionBusy === 'sync' ? copy.syncing : (props.migrationMode ? copy.sync : `${copy.sync}: ${routeName}`) }}
           </button>
           <button type="button" class="secondary-button" :disabled="!canPreview" @click="buildPreview">
             <span v-if="actionBusy === 'preview'" class="spinner" aria-hidden="true"></span>
             {{ actionBusy === 'preview' ? copy.previewing : copy.preview }}
           </button>
-          <button v-if="preview" type="button" class="text-button" :disabled="Boolean(actionBusy)" @click="clearPreview">{{ copy.reset }}</button>
+          <button v-if="preview || addonPreview" type="button" class="text-button" :disabled="Boolean(actionBusy)" @click="clearPreview">{{ copy.reset }}</button>
         </div>
 
         <section v-if="preview" class="preview-panel" aria-labelledby="preview-title">
@@ -1492,11 +1743,43 @@ onBeforeUnmount(() => {
           <p v-if="transferCount === 0" class="empty-state">{{ copy.noChanges }}</p>
         </section>
 
-        <section v-if="providerIssues.length" class="issues-panel" aria-labelledby="issues-title">
+        <section
+          v-if="addonPreview"
+          class="preview-panel addon-preview-panel"
+          aria-labelledby="addon-preview-title"
+        >
+          <div class="preview-heading">
+            <div>
+              <span class="eyebrow">{{ routeName }}</span>
+              <h3 id="addon-preview-title">{{ copy.addonPreviewTitle }}</h3>
+            </div>
+            <span class="preview-total">{{ addonPreview.additions.length }} {{ copy.addonsUnit }}</span>
+          </div>
+          <div class="stats-grid addon-stats-grid">
+            <div><strong>{{ addonPreview.sourceCount }}</strong><span>{{ copy.addonSource }}</span></div>
+            <div><strong>{{ addonPreview.additions.length }}</strong><span>{{ copy.addonNew }}</span></div>
+            <div><strong>{{ addonPreview.destinationCount }}</strong><span>{{ copy.addonKept }}</span></div>
+            <div><strong>{{ addonPreview.skipped.length }}</strong><span>{{ copy.addonSkipped }}</span></div>
+          </div>
+          <ul v-if="addonPreview.additions.length" class="addon-preview-list">
+            <li v-for="(addon, index) in addonPreview.additions" :key="`${addon.name}-${index}`">{{ addon.name }}</li>
+          </ul>
+          <p v-else class="empty-state">{{ copy.noChanges }}</p>
+        </section>
+
+        <section
+          v-if="providerIssues.length || extraMigrationIssues.length"
+          class="issues-panel"
+          aria-labelledby="issues-title"
+        >
           <h3 id="issues-title">{{ copy.providerNotes }}</h3>
           <ul>
             <li v-for="(issue, index) in providerIssues.slice(0, 20)" :key="`${issue.scope}-${index}`">
               <span :class="['issue-status', `issue-${issue.status}`]">{{ issue.status }}</span>
+              <span>{{ issue.reason }}</span>
+            </li>
+            <li v-for="(issue, index) in extraMigrationIssues" :key="`extra-${issue.label}-${index}`">
+              <span :class="['issue-status', `issue-${issue.status}`]">{{ issue.label }}</span>
               <span>{{ issue.reason }}</span>
             </li>
           </ul>
@@ -1514,7 +1797,8 @@ onBeforeUnmount(() => {
             <p>
               {{ syncResult.written.history }} {{ copy.historyUnit }} ·
               {{ syncResult.written.progress }} {{ copy.progressUnit }} ·
-              {{ syncResult.written.library }} {{ copy.savedTitlesUnit }}
+              {{ syncResult.written.library }} {{ copy.savedTitlesUnit }}<template v-if="props.enableAddonMigration"> ·
+              {{ addonResult?.written || 0 }} {{ copy.addonsUnit }}</template>
             </p>
           </div>
         </section>
@@ -1577,7 +1861,8 @@ onBeforeUnmount(() => {
             <p class="sync-run-counts">
               {{ syncResult.written.history }} {{ copy.historyUnit }} ·
               {{ syncResult.written.progress }} {{ copy.progressUnit }} ·
-              {{ syncResult.written.library }} {{ copy.savedTitlesUnit }}
+              {{ syncResult.written.library }} {{ copy.savedTitlesUnit }}<template v-if="props.enableAddonMigration"> ·
+              {{ addonResult?.written || 0 }} {{ copy.addonsUnit }}</template>
             </p>
             <section
               v-if="syncHasNotes"
@@ -1590,7 +1875,7 @@ onBeforeUnmount(() => {
                   <p>{{ copy.syncNotesIntro }}</p>
                 </div>
                 <span class="sync-run-notes-count">
-                  {{ providerIssues.length }} {{ providerIssues.length === 1 ? copy.note : copy.notes }}
+                  {{ syncNoteCount }} {{ syncNoteCount === 1 ? copy.note : copy.notes }}
                 </span>
               </div>
               <ul class="sync-run-note-list">
@@ -1606,6 +1891,13 @@ onBeforeUnmount(() => {
                     </small>
                   </div>
                   <span v-if="issue.count > 1" class="sync-run-note-repeat">×{{ issue.count }}</span>
+                </li>
+                <li
+                  v-for="(issue, index) in extraMigrationIssues"
+                  :key="`extra-${issue.label}-${index}`"
+                >
+                  <span class="sync-run-note-scope">{{ issue.label }}</span>
+                  <div><p>{{ issue.reason }}</p></div>
                 </li>
               </ul>
             </section>
@@ -1775,6 +2067,20 @@ onBeforeUnmount(() => {
 }
 .service-select-shell select:disabled { cursor: not-allowed; }
 .service-select-shell svg { width: 18px; fill: none; stroke: currentColor; stroke-width: 2; pointer-events: none; }
+.fixed-service {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 52px;
+  margin: 20px 0;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-1);
+}
+.fixed-service strong { font-size: 13px; font-weight: 600; }
+.sync-bridge.is-migration .endpoint-card { background: var(--vp-c-bg); }
+.sync-bridge.is-migration .scope-panel { background: var(--tool-surface-alt, var(--vp-c-bg-alt)); }
+.sync-bridge.is-migration .scope-option { background: var(--vp-c-bg); }
 .provider-access-note {
   display: flex;
   align-items: center;
@@ -1879,6 +2185,7 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .scope-panel { margin-top: 24px; padding: 24px 26px; }
 .section-heading { gap: 12px; margin-bottom: 18px; }
 .scope-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.scope-grid--addons { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .scope-option { position: relative; display: flex; align-items: flex-start; gap: 11px; padding: 16px; border: 1px solid var(--vp-c-divider); border-radius: 10px; background: var(--vp-c-bg-alt); cursor: pointer; }
 .scope-option.is-unsupported { opacity: .48; cursor: not-allowed; }
 .scope-option input { position: absolute; opacity: 0; }
@@ -1888,6 +2195,16 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .check-box { display: grid; place-items: center; flex: none; width: 18px; height: 18px; border: 1px solid var(--vp-c-divider); border-radius: 5px; color: transparent; }
 .check-box svg { width: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
 .scope-option input:checked + .check-box { border-color: var(--vp-c-brand-1); background: var(--vp-c-brand-1); color: white; }
+.addon-privacy-note {
+  margin: 15px 0 0;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--vp-c-warning-1) 38%, var(--vp-c-divider));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--vp-c-warning-soft) 55%, transparent);
+  color: var(--vp-c-text-2);
+  font-size: 11px;
+  line-height: 1.55;
+}
 .caveat-note { margin: 16px 0 0; color: var(--vp-c-text-3); font-size: 12px; line-height: 1.6; }
 
 .bridge-actions { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
@@ -1909,9 +2226,27 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 .preview-panel { margin-top: 20px; padding: 18px; }
 .preview-heading { justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .stats-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.addon-stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stats-grid > div { display: flex; flex-direction: column; padding: 11px; border: 1px solid var(--vp-c-divider); border-radius: 9px; background: var(--vp-c-bg); }
 .stats-grid strong { color: var(--vp-c-text-1); font-size: 20px; line-height: 1; }
 .stats-grid span { margin-top: 5px; color: var(--vp-c-text-3); font-size: 9px; text-transform: uppercase; }
+.addon-preview-panel { margin-top: 14px; }
+.addon-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.addon-preview-list li {
+  padding: 6px 9px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 999px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-2);
+  font-size: 10px;
+}
 .preview-table-wrap { overflow: auto; max-height: 520px; border: 1px solid var(--vp-c-divider); border-radius: 10px; background: var(--vp-c-bg); }
 table { width: 100%; border-collapse: collapse; font-size: 11px; }
 th, td { padding: 10px 12px; border-bottom: 1px solid var(--vp-c-divider); text-align: left; vertical-align: top; }

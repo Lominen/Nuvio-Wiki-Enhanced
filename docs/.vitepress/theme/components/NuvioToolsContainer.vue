@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, markRaw, ref, onMounted, onUnmounted } from 'vue'
 
-type ToolId = 'quickstart' | 'badge-editor' | 'p2p' | 'sync-bridge' | 'configuration-profiles' | 'profile-transfer'
+type ToolId = 'quickstart' | 'badge-editor' | 'p2p' | 'sync-bridge' | 'stremio-migration' | 'configuration-profiles' | 'profile-transfer'
 
 type ToolTab = {
   id: ToolId
@@ -63,6 +63,17 @@ const tabs: ToolTab[] = [
     props: { defaultExpanded: true, hideTip: true, hideHeader: true },
     workspace: true,
     icon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon-svg"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`
+  },
+  {
+    id: 'stremio-migration',
+    label: 'Stremio → Nuvio',
+    description: 'Move your Stremio account into Nuvio.',
+    title: 'Stremio to Nuvio Migration',
+    details: 'Move watched movies and episodes, continue-watching progress, saved titles, and compatible installed add-ons from <strong>Stremio</strong> into a selected <strong>Nuvio</strong> profile. Existing Nuvio data is kept, and the migration runs entirely in your browser.',
+    component: markRaw(defineAsyncComponent(() => import('./StremioNuvioMigration.vue'))),
+    props: {},
+    workspace: true,
+    icon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="tab-icon-svg"><path d="M4 5h7v14H4zM13 12h7"/><path d="m17 8 4 4-4 4"/></svg>`
   },
   {
     id: 'configuration-profiles',

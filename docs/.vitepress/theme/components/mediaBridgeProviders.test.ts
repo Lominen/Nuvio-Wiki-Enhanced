@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createEmptyBundle } from './mediaBridgeCore.ts'
 import {
+  enrichMediaBridgeBundle,
   identifyOAuthConnection,
   inspectDestinationMappings,
   pullMediaBridge,
@@ -10,6 +11,8 @@ import {
   signInJellyfin,
   type BridgeConnection
 } from './mediaBridgeProviders.ts'
+import { planMediaBridgePreview } from './mediaBridgePlan.ts'
+import { encodeStremioWatchedField } from './stremioWatched.ts'
 
 function traktConnection(slot: 'source' | 'destination' = 'destination'): BridgeConnection {
   return {
@@ -1272,6 +1275,310 @@ test('tries later Nuvio metadata addons before skipping an episode', async t => 
   assert.deepEqual([...new Set(metadataHosts)], ['first-meta.test', 'second-meta.test'])
   assert.equal(mappings[0].mapping.status, 'mapped')
   assert.equal(mappings[0].mapping.target?.videoId, 'tt0944947:1:2')
+})
+
+test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kitsu identity', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'kitsu-anime-user'
+  connection.profileId = 7
+  const searchedTitles: string[] = []
+  const metadataTypes: string[] = []
+  let watchedItems: any[] = []
+  let progressEntries: any[] = []
+  let libraryItems: any[] = []
+
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/api/trakt/enrich-metadata') {
+      return Response.json({
+        results: body.items.map((item: any) => ({
+          content_id: item.content_id,
+          imdbId: item._ids.imdb,
+          tmdbId: item._ids.tmdb
+        }))
+      })
+    }
+    if (url.pathname === '/rest/v1/addons') {
+      return Response.json([{
+        url: 'https://anime-kitsu.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 7
+      }])
+    }
+    if (url.pathname === '/manifest.json') {
+      return Response.json({
+        id: 'community.anime.kitsu',
+        resources: ['catalog', 'meta'],
+        types: ['anime', 'movie', 'series'],
+        idPrefixes: ['kitsu', 'mal', 'anilist', 'anidb'],
+        catalogs: [{
+          id: 'kitsu-anime-list',
+          type: 'anime',
+          extra: [{ name: 'search', isRequired: true }]
+        }]
+      })
+    }
+    if (url.pathname.startsWith('/catalog/anime/kitsu-anime-list/search=')) {
+      searchedTitles.push(
+        decodeURIComponent(url.pathname.split('/').at(-1)!.replace(/^search=/, '').replace(/\.json$/, ''))
+      )
+      return Response.json({
+        metas: [
+          {
+            id: 'kitsu:99',
+            type: 'anime',
+            name: 'Doragon Bōru Zetto',
+            releaseInfo: '1989-1996'
+          },
+          {
+            id: 'kitsu:100',
+            type: 'anime',
+            name: 'Dragon Ball Z',
+            releaseInfo: '1989'
+          }
+        ]
+      })
+    }
+    if (url.pathname.startsWith('/meta/')) {
+      const [, type] = /^\/meta\/([^/]+)\//.exec(url.pathname) || []
+      metadataTypes.push(type)
+      const metadataId = decodeURIComponent(url.pathname.split('/').at(-1)!.replace(/\.json$/, ''))
+      if (type === 'anime' && metadataId === 'kitsu:100') {
+        return Response.json({
+          meta: {
+            id: 'kitsu:100',
+            imdb_id: 'tt9999999',
+            videos: []
+          }
+        })
+      }
+      if (type !== 'anime' || metadataId !== 'kitsu:99') {
+        return new Response(null, { status: 404 })
+      }
+      return Response.json({
+        meta: {
+          id: 'kitsu:99',
+          imdb_id: 'tt0214341',
+          videos: [{
+            id: 'kitsu:99:1:40',
+            season: 1,
+            episode: 40,
+            title: 'Gohan’s Hidden Powers'
+          }]
+        }
+      })
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_delete_watched_items') {
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_push_watched_items') {
+      watchedItems = body.p_items
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_delete_watch_progress') {
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_push_watch_progress') {
+      progressEntries = body.p_entries
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_pull_library') {
+      return Response.json([])
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_push_library') {
+      libraryItems = body.p_items
+      return Response.json(null)
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const baseMedia = {
+    kind: 'series' as const,
+    ids: {
+      imdb: 'tt0214341',
+      tmdb: 12971,
+      tvdb: 81472,
+      trakt: 5630
+    },
+    title: 'Dragon Ball Z',
+    year: 1989
+  }
+  const source = createEmptyBundle()
+  source.history.push({
+    media: {
+      ...baseMedia,
+      ids: { ...baseMedia.ids },
+      season: 2,
+      episode: 1,
+      episodeTitle: 'Gohan’s Hidden Powers',
+      videoId: 'trakt:65122'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  source.progress.push({
+    media: {
+      ...baseMedia,
+      ids: { ...baseMedia.ids },
+      season: 2,
+      episode: 1,
+      episodeTitle: 'Gohan’s Hidden Powers',
+      videoId: 'trakt:65122'
+    },
+    positionMs: 600_000,
+    durationMs: 1_440_000,
+    updatedAt: Date.UTC(2026, 6, 18)
+  })
+  source.library.push({
+    media: { ...baseMedia, ids: { ...baseMedia.ids } },
+    addedAt: Date.UTC(2026, 6, 16),
+    lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
+  })
+
+  const enriched = await enrichMediaBridgeBundle(source, undefined, connection)
+  assert.equal(source.history[0].media.ids.external, undefined)
+  for (const record of [...enriched.history, ...enriched.progress, ...enriched.library]) {
+    assert.equal(record.media.ids.external?.kitsu, 99)
+  }
+  assert.deepEqual(searchedTitles, ['Dragon Ball Z'])
+
+  const scopes = { history: true, progress: true, library: true }
+  const mappings = await inspectDestinationMappings(
+    connection,
+    enriched,
+    scopes,
+    undefined,
+    traktConnection('source')
+  )
+  assert.ok(metadataTypes.length >= 3)
+  assert.ok(metadataTypes.every(type => type === 'anime'))
+  assert.equal(mappings.length, 2)
+  assert.ok(mappings.every(item => item.mapping.status === 'mapped'))
+  assert.ok(mappings.every(item => item.mapping.target?.videoId === 'kitsu:99:1:40'))
+
+  const plan = planMediaBridgePreview({
+    source: enriched,
+    destination: createEmptyBundle(),
+    sourceEndpoint: traktConnection('source'),
+    destinationEndpoint: connection,
+    destinationService: 'nuvio',
+    scopes,
+    mappingIssues: mappings
+  })
+  assert.equal(plan.transfer.history[0].media.videoId, 'kitsu:99:1:40')
+  assert.equal(plan.transfer.progress[0].media.videoId, 'kitsu:99:1:40')
+
+  const result = await pushMediaBridge({
+    connection,
+    bundle: plan.transfer,
+    scopes
+  })
+
+  assert.equal(watchedItems[0].content_id, 'kitsu:99')
+  assert.equal(watchedItems[0].season, 1)
+  assert.equal(watchedItems[0].episode, 40)
+  assert.equal(progressEntries[0].content_id, 'kitsu:99')
+  assert.equal(progressEntries[0].video_id, 'kitsu:99:1:40')
+  assert.equal(libraryItems[0].content_id, 'kitsu:99')
+  assert.deepEqual(result.written, { history: 1, progress: 1, library: 1 })
+  assert.deepEqual(result.issues, [])
+})
+
+test('decodes native Stremio Kitsu history with its installed addon episode order', async t => {
+  const connection = stremioConnection()
+  connection.slot = 'source'
+  connection.accountId = 'stremio-kitsu-user'
+  const videoIds = ['kitsu:99:1:39', 'kitsu:99:1:40']
+  const watched = await encodeStremioWatchedField([false, true], videoIds)
+  let cinemetaRequests = 0
+  let addonMetaRequests = 0
+
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/api/trakt/enrich-metadata') {
+      return Response.json({
+        results: body.items.map((item: any) => ({
+          content_id: item.content_id,
+          imdbId: 'tt0214341'
+        }))
+      })
+    }
+    if (url.hostname === 'api.strem.io' && url.pathname === '/api/datastoreGet') {
+      return Response.json({
+        result: [{
+          _id: 'kitsu:99',
+          _ctime: '2026-07-01T00:00:00Z',
+          _mtime: '2026-07-18T00:00:00Z',
+          name: 'Dragon Ball Z',
+          type: 'series',
+          removed: false,
+          temp: false,
+          state: {
+            watched,
+            lastWatched: '2026-07-18T00:00:00Z',
+            timeOffset: 600_000,
+            duration: 1_440_000,
+            video_id: 'kitsu:99:1:40'
+          }
+        }]
+      })
+    }
+    if (url.hostname === 'api.strem.io' && url.pathname === '/api/addonCollectionGet') {
+      assert.equal(body.update, false)
+      return Response.json({
+        result: {
+          addons: [{
+            transportUrl: 'https://source-kitsu.test/private/manifest.json?token=Secret',
+            manifest: {
+              id: 'community.anime.kitsu',
+              resources: [{ name: 'meta', types: ['anime'], idPrefixes: ['kitsu'] }],
+              types: ['anime'],
+              idPrefixes: ['kitsu']
+            }
+          }]
+        }
+      })
+    }
+    if (url.hostname === 'source-kitsu.test') {
+      addonMetaRequests++
+      assert.equal(url.pathname, '/private/meta/anime/kitsu%3A99.json')
+      assert.equal(url.searchParams.get('token'), 'Secret')
+      return Response.json({
+        meta: {
+          id: 'kitsu:99',
+          name: 'Dragon Ball Z',
+          videos: [
+            { id: videoIds[0], season: 1, episode: 39, title: 'The New Namek' },
+            { id: videoIds[1], season: 1, episode: 40, title: 'Gohan’s Hidden Powers' }
+          ]
+        }
+      })
+    }
+    if (url.hostname === 'v3-cinemeta.strem.io') {
+      cinemetaRequests++
+      return new Response(null, { status: 404 })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const result = await pullMediaBridge({
+    connection,
+    scopes: { history: true, progress: true, library: true }
+  })
+
+  assert.equal(cinemetaRequests, 0)
+  assert.equal(addonMetaRequests, 1)
+  assert.equal(result.bundle.history.length, 1)
+  assert.equal(result.bundle.history[0].media.season, 1)
+  assert.equal(result.bundle.history[0].media.episode, 40)
+  assert.equal(result.bundle.history[0].media.videoId, 'kitsu:99:1:40')
+  assert.equal(result.bundle.progress.length, 1)
+  assert.equal(result.bundle.progress[0].media.videoId, 'kitsu:99:1:40')
+  assert.equal(result.bundle.library[0].media.ids.external?.kitsu, 99)
+  assert.deepEqual(result.issues, [])
 })
 
 test('counts every item rejected by the Nuvio writer', async () => {
