@@ -394,7 +394,7 @@ test('maps alternate anime numbering only with strong title or sequence evidence
   assert.match(anchored.reason, /Unique episode-title anchors/)
   assert.equal(anchored.evidence?.sequenceAnchors?.length, 2)
 
-  const unsafeOrdinal = remapEpisode(
+  const anchoredDifferentTitle = remapEpisode(
     { season: 3, episode: 82, title: 'The Battle Begins at Dawn', videoId: 'source:current' },
     sourceSequence,
     [
@@ -403,10 +403,12 @@ test('maps alternate anime numbering only with strong title or sequence evidence
       { season: 1, episode: 12, title: 'Climbing the Frozen Mountain' }
     ]
   )
-  assert.equal(unsafeOrdinal.status, 'unresolved')
-  assert.equal(unsafeOrdinal.target, null)
-  assert.equal(unsafeOrdinal.evidence?.sequenceCandidate, null)
-  assert.equal(unsafeOrdinal.evidence?.sequenceAnchors?.length, 2)
+  assert.equal(anchoredDifferentTitle.status, 'mapped')
+  assert.equal(anchoredDifferentTitle.confidence, 'low')
+  assert.equal(anchoredDifferentTitle.target?.videoId, 'wrong:episode')
+  assert.ok((anchoredDifferentTitle.evidence?.sequenceCandidateTitleSimilarity ?? 1) < 0.72)
+  assert.equal(anchoredDifferentTitle.evidence?.sequenceAnchors?.length, 2)
+  assert.match(anchoredDifferentTitle.reason, /confidence is reduced/)
 })
 
 test('maps a long anime sequence after excluding specials and duplicate addon episodes', () => {

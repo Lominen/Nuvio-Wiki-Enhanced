@@ -826,6 +826,62 @@ test('applies a deterministic episode remap before comparison and transfer', () 
   assert.notEqual(plan.rows[0].sourceKey, plan.rows[0].targetKey)
 })
 
+test('shows the accepted sequence candidate and low title similarity in diagnostics', () => {
+  const source = createEmptyBundle()
+  const sourceMedia: MediaRef = {
+    kind: 'series',
+    ids: { imdb: 'tt0388629' },
+    title: 'One Piece',
+    season: 14,
+    episode: 525,
+    absoluteEpisode: 525,
+    episodeTitle: 'Lost in the Deep Sea! The Straw Hats Get Separated!',
+    videoId: 'trakt:856734'
+  }
+  source.history.push({ media: sourceMedia, watchedAt: 500 })
+  const mapping = remapEpisode(
+    {
+      season: 14,
+      episode: 525,
+      absoluteEpisode: 525,
+      title: sourceMedia.episodeTitle,
+      videoId: sourceMedia.videoId
+    },
+    [
+      { season: 13, episode: 518, title: 'An Explosive Situation! Luffy vs. Fake Luffy!' },
+      {
+        season: 14,
+        episode: 525,
+        absoluteEpisode: 525,
+        title: sourceMedia.episodeTitle,
+        videoId: sourceMedia.videoId
+      },
+      { season: 14, episode: 532, title: 'A Coward and a Crybaby! The Princess in the Hard Shell Tower!' }
+    ],
+    [
+      { season: 15, episode: 2, title: 'An Explosive Situation! Luffy vs. Fake Luffy!' },
+      { season: 15, episode: 9, title: 'A Completely Different Localized Title', videoId: 'kitsu:one-piece:525' },
+      { season: 15, episode: 16, title: 'A Coward and a Crybaby! The Princess in the Hard Shell Tower!' }
+    ]
+  )
+
+  const plan = planMediaBridgePreview({
+    source,
+    destination: createEmptyBundle(),
+    scopes: ALL_SCOPES,
+    mappingIssues: [{ scope: 'history', sourceMedia, mapping }]
+  })
+
+  assert.equal(mapping.status, 'mapped')
+  assert.equal(mapping.confidence, 'low')
+  assert.equal(plan.stats.remapped, 1)
+  assert.equal(plan.rows[0].mappingConfidence, 'low')
+  assert.match(
+    plan.rows[0].diagnostics.find(diagnostic => diagnostic.key === 'sequenceCandidate')?.value || '',
+    /S15E09.*A Completely Different Localized Title.*kitsu:one-piece:525.*% title similarity/
+  )
+})
+
 test('treats an existing destination episode as authoritative', () => {
   const source = createEmptyBundle()
   const destination = createEmptyBundle()

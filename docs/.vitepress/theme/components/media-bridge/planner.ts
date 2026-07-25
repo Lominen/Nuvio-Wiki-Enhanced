@@ -318,6 +318,17 @@ function sequenceAnchorsLabel(anchors: readonly EpisodeSequenceAnchor[]): string
     : 'None'
 }
 
+function sequenceCandidateLabel(
+  candidate: EpisodeRef | null | undefined,
+  titleSimilarity: number | null | undefined
+): string {
+  if (!candidate) return 'Unavailable'
+  const similarity = titleSimilarity === null || titleSimilarity === undefined
+    ? 'title similarity unavailable'
+    : `${(titleSimilarity * 100).toFixed(1)}% title similarity`
+  return `${episodeRefLabel(candidate)} · ${similarity}`
+}
+
 function mediaIdsLabel(ids: MediaIds): string {
   const values: string[] = []
   for (const namespace of ['imdb', 'tmdb', 'tvdb', 'trakt', 'simkl', 'plex', 'jellyfin', 'stremio', 'slug'] as const) {
@@ -379,7 +390,10 @@ function mappingEvidenceDiagnostics(
     if (evidence.sequenceCandidate !== undefined) {
       diagnostics.push({
         key: 'sequenceCandidate',
-        value: episodeRefLabel(evidence.sequenceCandidate)
+        value: sequenceCandidateLabel(
+          evidence.sequenceCandidate,
+          evidence.sequenceCandidateTitleSimilarity
+        )
       })
     }
     if (evidence.sequenceAnchors) {
@@ -957,13 +971,6 @@ export function planMediaBridgePreview(input: MediaBridgePlanInput): MediaBridge
       if (nuvioDuplicateCleanup) {
         outcome = 'update'
       }
-      const diagnostics = outcome === 'update' && destinationRecord
-        ? updateDiagnostics(scope, plannedRecord, destinationRecord, {
-            nuvioDuplicateCleanup,
-            historyWriteMode
-          })
-        : []
-      const updateReason = diagnostics.find(diagnostic => diagnostic.key === 'updateReason')?.value
       // Existing destination records are authoritative. Provider ID, title, and
       // absolute-number translations must neither overwrite them nor count as a
       // remap. Only a newly added record with changed visible coordinates is a
@@ -973,6 +980,18 @@ export function planMediaBridgePreview(input: MediaBridgePlanInput): MediaBridge
         && issue?.mapping.status === 'mapped'
         && episodeCoordinatesChanged(originalMedia, mappedMedia)
       )
+      const diagnostics = [
+        ...(remapped
+          ? mappingEvidenceDiagnostics(originalMedia, sourceKey, issue?.mapping.evidence)
+          : []),
+        ...(outcome === 'update' && destinationRecord
+          ? updateDiagnostics(scope, plannedRecord, destinationRecord, {
+              nuvioDuplicateCleanup,
+              historyWriteMode
+            })
+          : [])
+      ]
+      const updateReason = diagnostics.find(diagnostic => diagnostic.key === 'updateReason')?.value
       stats[outcome === 'already-present' ? 'alreadyPresent' : outcome]++
       if (remapped) stats.remapped++
       if (outcome === 'add' || outcome === 'update') {

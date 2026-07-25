@@ -769,6 +769,7 @@ export interface EpisodeMappingEvidence {
   titleMatches: readonly EpisodeRef[]
   fuzzyTitleMatches?: readonly EpisodeSimilarityMatch[]
   sequenceCandidate?: EpisodeRef | null
+  sequenceCandidateTitleSimilarity?: number | null
   sequenceAnchors?: readonly EpisodeSequenceAnchor[]
 }
 
@@ -894,6 +895,16 @@ function episodeTitleSimilarity(
   return distance === null ? null : 1 - (distance / maximumLength)
 }
 
+function episodeTitleSimilarityScore(
+  left: string,
+  right: string
+): number | null {
+  if (!fuzzyTitleEligible(left) || !fuzzyTitleEligible(right)) return null
+  const maximumLength = Math.max(left.length, right.length)
+  const distance = boundedLevenshteinDistance(left, right, maximumLength)
+  return distance === null ? null : 1 - (distance / maximumLength)
+}
+
 function fuzzyEpisodeTitleMatches(
   sourceTitle: string,
   targetEpisodes: readonly EpisodeRef[]
@@ -931,12 +942,17 @@ function anchoredSequenceCandidate(
   source: EpisodeRef,
   sourceEpisodes: readonly EpisodeRef[],
   targetEpisodes: readonly EpisodeRef[]
-): { candidate: EpisodeRef | null; anchors: EpisodeSequenceAnchor[] } {
+): {
+  candidate: EpisodeRef | null
+  anchors: EpisodeSequenceAnchor[]
+  titleSimilarity?: number | null
+} {
   // Match Nuvio's native Trakt mapper by comparing the regular-episode
   // sequences, not season-zero specials, and by removing duplicate addon
-  // entries before indexes are compared. Unlike Nuvio's unconditional
-  // same-index fallback, the bridge still requires two exact-title anchors and
-  // a similar candidate title before accepting the translated position.
+  // entries before indexes are compared. The bridge requires two unique
+  // exact-title anchors with identical source and destination spans. A
+  // differing candidate title lowers confidence but cannot veto a position
+  // confirmed by those surrounding anchors.
   if (source.season <= 0 || source.episode <= 0) return { candidate: null, anchors: [] }
   const orderedSource = normalizedRegularEpisodeSequence(sourceEpisodes)
   const orderedTarget = normalizedRegularEpisodeSequence(targetEpisodes)
@@ -972,11 +988,11 @@ function anchoredSequenceCandidate(
 
   const candidateIndex = before.targetIndex + beforeDistance
   const candidate = orderedTarget[candidateIndex]
+  if (!candidate) return { candidate: null, anchors: [before, after] }
   const sourceTitle = meaningfulEpisodeTitle(source.title)
   const targetTitle = meaningfulEpisodeTitle(candidate?.title)
-  const similarity = episodeTitleSimilarity(sourceTitle, targetTitle, SEQUENCE_TITLE_THRESHOLD)
-  if (!candidate || similarity === null) return { candidate: null, anchors: [before, after] }
-  return { candidate, anchors: [before, after] }
+  const titleSimilarity = episodeTitleSimilarityScore(sourceTitle, targetTitle)
+  return { candidate, anchors: [before, after], titleSimilarity }
 }
 
 function ambiguous(
@@ -1198,14 +1214,22 @@ export function remapEpisode(
   const sequenceEvidence: EpisodeMappingEvidence = {
     ...fuzzyEvidence,
     sequenceCandidate: sequence.candidate,
+    sequenceCandidateTitleSimilarity: sequence.titleSimilarity,
     sequenceAnchors: sequence.anchors
   }
   if (sequence.candidate) {
+    const similarTitle = (
+      sequence.titleSimilarity !== null
+      && sequence.titleSimilarity !== undefined
+      && sequence.titleSimilarity >= SEQUENCE_TITLE_THRESHOLD
+    )
     return {
       ...mapped(
-        'medium',
+        similarTitle ? 'medium' : 'low',
         sequence.candidate,
-        'Unique episode-title anchors confirm the same normalized sequence position across differently numbered catalogs.'
+        similarTitle
+          ? 'Unique episode-title anchors confirm the same normalized sequence position across differently numbered catalogs.'
+          : 'Unique episode-title anchors confirm the same normalized sequence position; the destination candidate title differs, so confidence is reduced.'
       ),
       evidence: sequenceEvidence
     }
