@@ -52,7 +52,7 @@ Every addon has a `manifest.json` that declares its `id`, `name`, `version`, sup
 This is a distinct, built-in system — not an addon. While addons like AIOStreams can resolve debrid links on their server, Nuvio has its own debrid engine that does this locally on your device. Understanding the difference is critical to setting up your addons correctly.
 
 ### What It Does
-Nuvio's native debrid integration takes raw magnet links (from P2P addon results or plugin results) and resolves them through your linked debrid account directly. This means Nuvio itself calls the Torbox or Premiumize API to check the cache, create the torrent, select the file, and get a direct download link — all without an external addon touching your API key.
+Nuvio's native debrid integration takes raw magnet links (from P2P addon results) and resolves them through your linked debrid account directly. This means Nuvio itself calls the Torbox or Premiumize API to check the cache, create the torrent, select the file, and get a direct download link — all without an external addon touching your API key.
 
 ### Supported Providers
 Nuvio's debrid integration currently supports two providers, **Torbox** and **Premiumize**.
