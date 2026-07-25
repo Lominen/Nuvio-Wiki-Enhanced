@@ -477,6 +477,7 @@ export function createMediaBridgeEngine(
     })
     const write: ProviderWriteResult = await adapter.write({
       connection: input.destination,
+      sourceConnection: input.source,
       bundle: transfer,
       scopes,
       log: message => emit('write', message, { provider: input.destination.service })
