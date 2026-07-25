@@ -32,4 +32,11 @@ jobs:
         run: npm --prefix server test
 
       - name: Build docs and verify links
-        run: npm run docs:build
+        env:
+          VITEPRESS_BASE: /
+        run: |
+          sed -i \
+            "s/puppeteer.launch({ headless: 'shell' })/puppeteer.launch({ headless: 'shell', args: ['--no-sandbox'] })/" \
+            scripts/render-mermaid.mjs
+          grep -Fq "puppeteer.launch({ headless: 'shell', args: ['--no-sandbox'] })" scripts/render-mermaid.mjs
+          npm run docs:build
