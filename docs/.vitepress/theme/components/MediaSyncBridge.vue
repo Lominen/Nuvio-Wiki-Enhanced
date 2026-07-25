@@ -881,7 +881,7 @@ async function handleOAuthMessage(event: MessageEvent) {
           clientId: String(payload.client_id || ''),
           accessToken: String(payload.tokens?.access_token || payload.tokens?.token || '')
         } as SimklCredentials
-    const connection = await identifyOAuthConnection(slot, credentials)
+    const connection = await identifyOAuthConnection(slot, credentials, selectedService.source)
     connections[slot] = connection
     clearPreview()
     appendLog(`${SERVICE_DEFINITIONS[service].label} connected as ${connection.displayName || connection.accountId}.`)
@@ -1369,7 +1369,10 @@ onBeforeUnmount(() => {
               <strong>{{ SERVICE_DEFINITIONS[selectedService[slot]].label }}</strong>
             </div>
 
-            <div v-if="slot === 'destination' && selectedService[slot] === 'simkl'" class="provider-access-note">
+            <div
+              v-if="slot === 'destination' && selectedService[slot] === 'simkl' && selectedService.source !== 'nuvio'"
+              class="provider-access-note"
+            >
               <p>{{ copy.simklImportAccess }}</p>
               <a
                 class="primary-button simkl-upgrade-button"

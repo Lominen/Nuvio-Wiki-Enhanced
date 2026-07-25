@@ -73,7 +73,7 @@ test('accepts Simkl Pro and VIP destinations using the documented settings reque
   assert.equal(fetchMock.mock.callCount(), 2)
 })
 
-test('rejects Simkl Free accounts as import destinations', async t => {
+test('rejects Simkl Free accounts as import destinations from Trakt', async t => {
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({
     user: { name: 'free-user' },
     account: { id: 303, type: 'free' }
@@ -84,9 +84,27 @@ test('rejects Simkl Free accounts as import destinations', async t => {
       service: 'simkl',
       clientId: 'test-client',
       accessToken: 'test-token'
-    }),
+    }, 'trakt'),
     /not available for Free accounts.*Pro or VIP/
   )
+  assert.equal(fetchMock.mock.callCount(), 1)
+})
+
+test('allows Simkl Free accounts as import destinations from Nuvio', async t => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({
+    user: { name: 'free-user' },
+    account: { id: 303, type: 'free' }
+  }))
+
+  const connection = await identifyOAuthConnection('destination', {
+    service: 'simkl',
+    clientId: 'test-client',
+    accessToken: 'test-token'
+  }, 'nuvio')
+
+  assert.equal(connection.service, 'simkl')
+  assert.equal(connection.simklAccountType, 'free')
+  assert.equal(connection.displayName, 'free-user')
   assert.equal(fetchMock.mock.callCount(), 1)
 })
 
@@ -110,7 +128,7 @@ test('allows Simkl Free accounts as export sources', async t => {
   assert.equal(fetchMock.mock.callCount(), 1)
 })
 
-test('blocks Simkl writes when a paid plan was not verified', async t => {
+test('blocks non-Nuvio Simkl writes when a paid plan was not verified', async t => {
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({}))
   const connection = simklConnection()
   connection.simklAccountType = 'free'
@@ -120,12 +138,35 @@ test('blocks Simkl writes when a paid plan was not verified', async t => {
   await assert.rejects(
     pushMediaBridge({
       connection,
+      sourceConnection: traktConnection('source'),
       bundle,
       scopes: { history: true, progress: false, library: false }
     }),
     /only available for Simkl Pro or VIP accounts/
   )
   assert.equal(fetchMock.mock.callCount(), 0)
+})
+
+test('allows Nuvio writes to Simkl when a paid plan was not verified', async t => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({
+    added: { movies: 1 },
+    not_found: { movies: [], shows: [], anime: [] }
+  }))
+  const connection = simklConnection()
+  connection.simklAccountType = 'free'
+  const bundle = createEmptyBundle()
+  bundle.history.push(movieHistory('Available import', 'tt2015381', Date.UTC(2026, 6, 17)))
+
+  const result = await pushMediaBridge({
+    connection,
+    sourceConnection: nuvioConnection('source'),
+    bundle,
+    scopes: { history: true, progress: false, library: false }
+  })
+
+  assert.equal(fetchMock.mock.callCount(), 1)
+  assert.equal(result.written.history, 1)
+  assert.deepEqual(result.confirmedScopes, ['history'])
 })
 
 function stremioConnection(): BridgeConnection {
@@ -141,9 +182,9 @@ function stremioConnection(): BridgeConnection {
   }
 }
 
-function nuvioConnection(): BridgeConnection {
+function nuvioConnection(slot: 'source' | 'destination' = 'destination'): BridgeConnection {
   return {
-    slot: 'destination',
+    slot,
     service: 'nuvio',
     accountId: 'nuvio-user',
     profileId: 1,

@@ -46,6 +46,7 @@ export interface ProviderResolveOptions extends ProviderSnapshotOptions {
 
 export interface ProviderWriteOptions extends ProviderSnapshotOptions {
   bundle: CanonicalBundle
+  sourceConnection: BridgeConnection
 }
 
 export interface ProviderVerifyOptions extends ProviderSnapshotOptions {

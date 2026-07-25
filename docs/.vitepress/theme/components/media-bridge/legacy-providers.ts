@@ -251,6 +251,7 @@ export interface PullOptions {
 
 export interface PushOptions extends PullOptions {
   bundle: CanonicalBundle
+  sourceConnection?: BridgeConnection
 }
 
 const traktTokenRefreshes = new WeakMap<object, Promise<string>>()
@@ -1270,7 +1271,8 @@ export async function createStremioLinkedConnection(
 
 export async function identifyOAuthConnection(
   slot: BridgeSlot,
-  credentials: TraktCredentials | SimklCredentials
+  credentials: TraktCredentials | SimklCredentials,
+  sourceService?: ServiceId
 ): Promise<BridgeConnection> {
   const temporary: BridgeConnection = {
     slot,
@@ -1304,10 +1306,10 @@ export async function identifyOAuthConnection(
     accountType = (
       rawAccountType === 'free' || rawAccountType === 'pro' || rawAccountType === 'vip'
     ) ? rawAccountType : undefined
-    if (accountType === 'free') {
+    if (sourceService !== 'nuvio' && accountType === 'free') {
       throw new Error('Importing to Simkl is not available for Free accounts. A Simkl Pro or VIP account is required.')
     }
-    if (accountType !== 'pro' && accountType !== 'vip') {
+    if (sourceService !== 'nuvio' && accountType !== 'pro' && accountType !== 'vip') {
       throw new Error('Could not verify a Simkl Pro or VIP account, so importing to Simkl is not available.')
     }
   }
@@ -3496,11 +3498,15 @@ function hasSimklWriteEnvelope(data: any): boolean {
 }
 
 async function pushSimkl(options: PushOptions): Promise<PushResult> {
-  const { connection, bundle, scopes, log } = options
+  const { connection, sourceConnection, bundle, scopes, log } = options
   if (connection.slot !== 'destination') {
     throw new Error('Simkl can only be used as an import destination in the Sync Bridge.')
   }
-  if (connection.simklAccountType !== 'pro' && connection.simklAccountType !== 'vip') {
+  if (
+    sourceConnection?.service !== 'nuvio'
+    && connection.simklAccountType !== 'pro'
+    && connection.simklAccountType !== 'vip'
+  ) {
     throw new Error('Importing to Simkl is only available for Simkl Pro or VIP accounts.')
   }
   const written: PushCounts = { history: 0, progress: 0, library: 0 }
