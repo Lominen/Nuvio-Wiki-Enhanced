@@ -4,6 +4,29 @@ docs/.vitepress/cache/
 docs/.vitepress/dist/
 /docs/public/mermaid/
 .DS_Store
+Thumbs.db
+
+# Environment and local overrides
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test and coverage output
+coverage/
+test-results/
+playwright-report/
 
 # AI server
 server/.env
@@ -24,6 +47,7 @@ server/node_modules/
 
 # Scratch files
 scratch/
+/process_image.js
 
 # Local repository helpers
 /Start Nuvio Wiki.cmd
