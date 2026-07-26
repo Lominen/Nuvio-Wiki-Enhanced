@@ -474,7 +474,7 @@ function updateDiagnostics(
     const destinationHistory = destination as HistoryRecord
     reasons.push(
       options.historyWriteMode === 'state'
-        ? 'The source watched timestamp is more than five minutes newer.'
+        ? 'The source watched timestamp is more than one hour newer.'
         : 'The source watched timestamp is newer.'
     )
     changes.push(
@@ -677,7 +677,7 @@ function progressEquivalent(source: ProgressRecord, destination: ProgressRecord)
   )
 }
 
-const STATE_HISTORY_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000
+const STATE_HISTORY_TIMESTAMP_TOLERANCE_MS = 60 * 60 * 1000
 
 function needsNuvioLibraryImdbUpgrade(source: ScopedRecord, destination: ScopedRecord): boolean {
   const sourceImdb = String(source.media.ids.imdb ?? '').trim().toLowerCase()

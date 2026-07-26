@@ -80,7 +80,7 @@ test('classifies add, update, and already-present records without downgrading pr
 
   source.history.push(
     { media: movie('tt101', 'New'), watchedAt: 100 },
-    { media: movie('tt102', 'Newer'), watchedAt: 600_001 },
+    { media: movie('tt102', 'Newer'), watchedAt: 3_900_001 },
     { media: movie('tt103', 'Existing'), watchedAt: 100 }
   )
   destination.history.push(
@@ -107,10 +107,10 @@ test('classifies add, update, and already-present records without downgrading pr
   assert.equal(plan.transfer.progress.length, 1)
   assert.equal(plan.rows.find(row => row.title === 'Destination newer')?.outcome, 'already-present')
   const historyUpdate = plan.rows.find(row => row.title === 'Newer')
-  assert.equal(historyUpdate?.detail, 'The source watched timestamp is more than five minutes newer.')
+  assert.equal(historyUpdate?.detail, 'The source watched timestamp is more than one hour newer.')
   assert.match(
     historyUpdate?.diagnostics.find(diagnostic => diagnostic.key === 'changes')?.value || '',
-    /watchedAt:.*300000 ms.*→.*600001 ms/
+    /watchedAt:.*300000 ms.*→.*3900001 ms/
   )
   const progressUpdate = plan.rows.find(row => row.title === 'Changed')
   assert.equal(
@@ -136,7 +136,7 @@ test('keeps collapsed history idempotent when only provider replay counts differ
   assert.equal(plan.transfer.history.length, 0)
 })
 
-test('tolerates watched timestamps up to five minutes apart for state destinations', () => {
+test('tolerates watched timestamps up to one hour apart for state destinations', () => {
   const withinToleranceSource = createEmptyBundle()
   const withinToleranceDestination = createEmptyBundle()
   const breakingBad = episode('tt0903747', 'Breaking Bad', 1, 3)
@@ -162,7 +162,7 @@ test('tolerates watched timestamps up to five minutes apart for state destinatio
 
   const boundarySource = createEmptyBundle()
   const boundaryDestination = createEmptyBundle()
-  boundarySource.history.push({ media: breakingBad, watchedAt: 1_300_000 })
+  boundarySource.history.push({ media: breakingBad, watchedAt: 4_600_000 })
   boundaryDestination.history.push({ media: breakingBad, watchedAt: 1_000_000 })
 
   const exactBoundary = planMediaBridgePreview({
@@ -187,7 +187,7 @@ test('tolerates watched timestamps up to five minutes apart for state destinatio
   assert.equal(beyondBoundary.transfer.history.length, 1)
   assert.equal(
     beyondBoundary.rows[0].detail,
-    'The source watched timestamp is more than five minutes newer.'
+    'The source watched timestamp is more than one hour newer.'
   )
 })
 
@@ -936,7 +936,7 @@ test('treats an existing destination episode as authoritative', () => {
     episodeTitle: 'The Wolf and the Lion',
     videoId: 'destination:episode-5'
   }
-  source.history.push({ media: sourceMedia, watchedAt: 500_000 })
+  source.history.push({ media: sourceMedia, watchedAt: 3_700_001 })
   destination.history.push({ media: destinationMedia, watchedAt: 100_000 })
 
   const plan = planMediaBridgePreview({
@@ -971,7 +971,7 @@ test('treats an existing destination episode as authoritative', () => {
   assert.equal(plan.rows[0].remapped, false)
   assert.equal(plan.rows[0].outcomeLabel, 'Update destination')
   assert.equal(plan.rows[0].title, 'Game of Thrones')
-  assert.equal(plan.rows[0].detail, 'The source watched timestamp is more than five minutes newer.')
+  assert.equal(plan.rows[0].detail, 'The source watched timestamp is more than one hour newer.')
   assert.deepEqual(
     plan.rows[0].diagnostics.map(diagnostic => diagnostic.key),
     ['updateReason', 'sourceState', 'destinationState', 'changes', 'sourceIds', 'destinationIds']
