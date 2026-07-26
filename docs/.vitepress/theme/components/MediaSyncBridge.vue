@@ -21,7 +21,8 @@ import {
 } from './mediaBridgeCore'
 import {
   type MediaBridgePreviewPlan,
-  type PreviewDiagnosticKey
+  type PreviewDiagnosticKey,
+  type PreviewRow
 } from './mediaBridgePlan'
 import {
   createJellyfinConnection,
@@ -159,6 +160,9 @@ const syncCopy = computed(() => isDutch.value ? {
   next: 'Volgende',
   page: 'Pagina',
   activity: 'Activiteit',
+  copyActivity: 'Logs kopiÃ«ren',
+  activityCopied: 'Gekopieerd',
+  activityCopyFailed: 'KopiÃ«ren mislukt',
   result: 'Synchronisatie voltooid',
   resultWarnings: 'Synchronisatie voltooid met meldingen',
   finishedWarnings: 'Synchronisatie voltooid met meldingen.',
@@ -276,6 +280,9 @@ const syncCopy = computed(() => isDutch.value ? {
   next: 'Next',
   page: 'Page',
   activity: 'Activity',
+  copyActivity: 'Copy logs',
+  activityCopied: 'Copied',
+  activityCopyFailed: 'Copy failed',
   result: 'Sync complete',
   resultWarnings: 'Sync complete with notes',
   finishedWarnings: 'Sync complete with notes.',
@@ -430,11 +437,13 @@ const previewSignature = ref('')
 const providerIssues = ref<BridgeIssue[]>([])
 const extraMigrationIssues = ref<Array<{
   label: string
+  itemLabel?: string
   status: 'warning' | 'note'
   reason: string
 }>>([])
 const syncResult = ref<PushResult | null>(null)
 const activity = ref<string[]>([])
+const activityCopyStatus = ref<'idle' | 'copied' | 'failed'>('idle')
 const syncViewOpen = ref(false)
 const syncView = ref<HTMLElement | null>(null)
 const previewPage = ref(1)
@@ -452,6 +461,7 @@ const oauthTransactions = new Map<string, OAuthTransaction>()
 const stremioPopups: Record<BridgeSlot, Window | null> = { source: null, destination: null }
 const plexPopups: Record<BridgeSlot, Window | null> = { source: null, destination: null }
 let componentMounted = false
+let activityCopyResetTimer: ReturnType<typeof setTimeout> | null = null
 
 const endpointValidation = computed(() => validateEndpointPair(
   connections.source,
@@ -546,6 +556,14 @@ const previewPages = computed(() => Math.max(
   1,
   Math.ceil((preview.value?.rows.length || 0) / previewPageSize)
 ))
+const previewIssueDetails = computed(() => {
+  const rows = preview.value?.rows || []
+  return providerIssues.value.map(issue => ({
+    issue,
+    mediaLabel: formatIssueMedia(issue),
+    previewRow: previewRowForIssue(issue, rows)
+  }))
+})
 
 let documentOverflowBeforeSync = ''
 let documentScrollLocked = false
@@ -600,6 +618,47 @@ function appendLog(message: string) {
     second: '2-digit'
   })}  ${message}`)
   if (activity.value.length > 250) activity.value.splice(0, activity.value.length - 250)
+  activityCopyStatus.value = 'idle'
+}
+
+function copyActivityFallback(value: string): boolean {
+  if (typeof document === 'undefined') return false
+  const field = document.createElement('textarea')
+  field.value = value
+  field.setAttribute('readonly', '')
+  field.style.position = 'fixed'
+  field.style.opacity = '0'
+  document.body.appendChild(field)
+  field.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    field.remove()
+  }
+}
+
+async function copyActivityLogs() {
+  const value = activity.value.join('\n')
+  if (!value) return
+  let copied = false
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      copied = true
+    } else {
+      copied = copyActivityFallback(value)
+    }
+  } catch {
+    copied = copyActivityFallback(value)
+  }
+  activityCopyStatus.value = copied ? 'copied' : 'failed'
+  if (activityCopyResetTimer) clearTimeout(activityCopyResetTimer)
+  activityCopyResetTimer = setTimeout(() => {
+    activityCopyStatus.value = 'idle'
+    activityCopyResetTimer = null
+  }, 2000)
 }
 
 function wait(ms: number) {
@@ -1045,18 +1104,14 @@ function appendIssueLogs(issues: readonly BridgeIssue[]) {
 }
 
 function recordAddonSkips(plan: StremioNuvioAddonPlan) {
-  const grouped = new Map<string, number>()
   for (const skipped of plan.skipped) {
-    grouped.set(skipped.reason, (grouped.get(skipped.reason) || 0) + 1)
-  }
-  for (const [reason, count] of grouped) {
-    const message = `${count} Stremio add-on${count === 1 ? '' : 's'} skipped. ${reason}`
     extraMigrationIssues.value.push({
       label: copy.value.addons,
+      itemLabel: skipped.name,
       status: 'note',
-      reason: message
+      reason: skipped.reason
     })
-    appendLog(`Note add-ons: ${message}`)
+    appendLog(`Skipped add-on "${skipped.name}": ${skipped.reason}`)
   }
 }
 
@@ -1223,12 +1278,53 @@ function formatScope(scope: string) {
 
 function formatIssueMedia(issue: BridgeIssue) {
   const media = issue.media
-  if (!media?.title) return ''
-  const episode = Number.isInteger(media.season) && Number.isInteger(media.episode)
-    ? ` S${media.season}E${media.episode}`
-    : ''
+  if (!media) return ''
+  const ids = Object.entries(media.ids)
+    .filter(([namespace, value]) => namespace !== 'external' && value !== undefined && value !== null && String(value).trim())
+    .map(([namespace, value]) => `${namespace}:${value}`)
+  for (const [namespace, value] of Object.entries(media.ids.external || {})) {
+    if (value !== undefined && value !== null && String(value).trim()) {
+      ids.push(`${namespace}:${value}`)
+    }
+  }
+  const title = String(media.title || '').trim() || ids[0] || media.kind
   const year = media.year ? ` (${media.year})` : ''
-  return `${media.title}${year}${episode}`
+  const episode = Number.isInteger(media.season) && Number.isInteger(media.episode)
+    ? `S${String(media.season).padStart(2, '0')}E${String(media.episode).padStart(2, '0')}`
+    : Number.isInteger(media.absoluteEpisode)
+      ? `Episode ${media.absoluteEpisode}`
+      : ''
+  return [
+    `${title}${year}`,
+    episode,
+    String(media.episodeTitle || '').trim()
+  ].filter(Boolean).join(' · ')
+}
+
+function previewRowForIssue(
+  issue: BridgeIssue,
+  rows: readonly PreviewRow[]
+): PreviewRow | null {
+  if (!issue.media || (issue.status !== 'unresolved' && issue.status !== 'ambiguous')) return null
+  const matches = (row: PreviewRow) => (
+    row.scope === issue.scope
+    && row.outcome === issue.status
+    && row.detail === issue.reason
+  )
+  const exact = rows.find(row => matches(row) && row.media === issue.media)
+  if (exact) return exact
+  return rows.find(row => {
+    if (!matches(row)) return false
+    const media = issue.media!
+    return row.media.kind === media.kind
+      && row.media.title === media.title
+      && row.media.year === media.year
+      && row.media.season === media.season
+      && row.media.episode === media.episode
+      && row.media.absoluteEpisode === media.absoluteEpisode
+      && row.media.videoId === media.videoId
+      && JSON.stringify(row.media.ids) === JSON.stringify(media.ids)
+  }) || null
 }
 
 function outcomeClass(outcome: string) {
@@ -1241,6 +1337,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   componentMounted = false
+  if (activityCopyResetTimer) clearTimeout(activityCopyResetTimer)
   restoreDocumentScroll()
   connectionAttempt.source++
   connectionAttempt.destination++
@@ -1777,16 +1874,38 @@ onBeforeUnmount(() => {
         >
           <h3 id="issues-title">{{ copy.providerNotes }}</h3>
           <ul>
-            <li v-for="(issue, index) in providerIssues.slice(0, 20)" :key="`${issue.scope}-${index}`">
+            <li
+              v-for="({ issue, mediaLabel, previewRow }, index) in previewIssueDetails"
+              :key="`${issue.scope}-${issue.status}-${index}`"
+            >
               <span :class="['issue-status', `issue-${issue.status}`]">{{ issue.status }}</span>
-              <span>{{ issue.reason }}</span>
+              <div class="issue-detail-content">
+                <div class="issue-detail-heading">
+                  <strong v-if="mediaLabel">{{ mediaLabel }}</strong>
+                  <span>{{ formatScope(issue.scope) }}</span>
+                </div>
+                <p>{{ issue.reason }}</p>
+                <details v-if="previewRow?.diagnostics.length" class="mapping-diagnostics">
+                  <summary>{{ copy.troubleshooting }}</summary>
+                  <dl>
+                    <template v-for="diagnostic in previewRow.diagnostics" :key="diagnostic.key">
+                      <dt>{{ diagnosticLabel(diagnostic.key) }}</dt>
+                      <dd>{{ diagnostic.value }}</dd>
+                    </template>
+                  </dl>
+                </details>
+              </div>
             </li>
             <li v-for="(issue, index) in extraMigrationIssues" :key="`extra-${issue.label}-${index}`">
               <span :class="['issue-status', `issue-${issue.status}`]">{{ issue.label }}</span>
-              <span>{{ issue.reason }}</span>
+              <div class="issue-detail-content">
+                <div v-if="issue.itemLabel" class="issue-detail-heading">
+                  <strong>{{ issue.itemLabel }}</strong>
+                </div>
+                <p>{{ issue.reason }}</p>
+              </div>
             </li>
           </ul>
-          <p v-if="providerIssues.length > 20">{{ providerIssues.length - 20 }} {{ copy.moreNotes }}.</p>
         </section>
 
         <section
@@ -1808,6 +1927,21 @@ onBeforeUnmount(() => {
 
         <details v-if="activity.length" class="activity-panel" :open="Boolean(actionBusy)">
           <summary>{{ copy.activity }} <span>{{ activity.length }}</span></summary>
+          <div class="activity-toolbar">
+            <button
+              type="button"
+              :class="['activity-copy-button', `is-${activityCopyStatus}`]"
+              @click="copyActivityLogs"
+            >
+              {{
+                activityCopyStatus === 'copied'
+                  ? copy.activityCopied
+                  : activityCopyStatus === 'failed'
+                    ? copy.activityCopyFailed
+                    : copy.copyActivity
+              }}
+            </button>
+          </div>
           <pre>{{ activity.join('\n') }}</pre>
         </details>
 
@@ -1900,7 +2034,10 @@ onBeforeUnmount(() => {
                   :key="`extra-${issue.label}-${index}`"
                 >
                   <span class="sync-run-note-scope">{{ issue.label }}</span>
-                  <div><p>{{ issue.reason }}</p></div>
+                  <div>
+                    <p>{{ issue.reason }}</p>
+                    <small v-if="issue.itemLabel">{{ issue.itemLabel }}</small>
+                  </div>
                 </li>
               </ul>
             </section>
@@ -2275,10 +2412,15 @@ td strong { color: var(--vp-c-text-1); font-weight: 650; }
 
 .issues-panel { margin-top: 16px; padding: 16px; }
 .issues-panel h3 { font-size: 13px; }
-.issues-panel ul { display: grid; gap: 7px; margin: 12px 0 0; padding: 0; list-style: none; }
-.issues-panel li { display: flex; align-items: flex-start; gap: 8px; color: var(--vp-c-text-2); font-size: 11px; line-height: 1.5; }
+.issues-panel ul { display: grid; gap: 8px; max-height: 520px; overflow: auto; margin: 12px 0 0; padding: 0; list-style: none; }
+.issues-panel li { display: flex; align-items: flex-start; gap: 9px; padding: 10px; border: 1px solid var(--vp-c-divider); border-radius: 9px; background: var(--vp-c-bg); color: var(--vp-c-text-2); font-size: 11px; line-height: 1.5; }
 .issue-status { background: var(--vp-c-warning-soft); color: var(--vp-c-warning-1); text-transform: uppercase; }
 .issue-warning, .issue-note { background: var(--vp-c-default-soft); color: var(--vp-c-text-2); }
+.issue-detail-content { min-width: 0; flex: 1; }
+.issue-detail-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 8px; margin-bottom: 3px; }
+.issue-detail-heading strong { overflow-wrap: anywhere; color: var(--vp-c-text-1); font-size: 11px; font-weight: 700; }
+.issue-detail-heading span { color: var(--vp-c-text-3); font-size: 9px; font-weight: 650; text-transform: uppercase; }
+.issue-detail-content > p { margin: 0; overflow-wrap: anywhere; }
 .issues-panel > p { margin: 9px 0 0; color: var(--vp-c-text-3); font-size: 10px; }
 
 .result-panel { gap: 13px; margin-top: 16px; padding: 16px; border: 1px solid color-mix(in srgb, var(--vp-c-green-1) 40%, var(--vp-c-divider)); border-radius: var(--bridge-radius); background: var(--vp-c-green-soft); }
@@ -2291,6 +2433,11 @@ td strong { color: var(--vp-c-text-1); font-weight: 650; }
 .activity-panel { margin-top: 16px; overflow: hidden; background: #0d0f14; }
 .activity-panel summary { padding: 12px 14px; color: #d9dce5; font-size: 11px; font-weight: 700; cursor: pointer; }
 .activity-panel summary span { margin-left: 5px; color: #858b9b; }
+.activity-toolbar { display: flex; justify-content: flex-end; padding: 8px 10px; border-top: 1px solid #252936; background: #090b0f; }
+.activity-copy-button { min-height: 28px; padding: 4px 9px; border: 1px solid #343948; border-radius: 7px; background: #171a22; color: #c7ccd8; font-size: 10px; font-weight: 700; cursor: pointer; }
+.activity-copy-button:hover { border-color: #596176; color: #fff; }
+.activity-copy-button.is-copied { border-color: color-mix(in srgb, var(--vp-c-green-1) 60%, #343948); color: var(--vp-c-green-1); }
+.activity-copy-button.is-failed { border-color: color-mix(in srgb, var(--vp-c-danger-1) 60%, #343948); color: var(--vp-c-danger-1); }
 .activity-panel pre { max-height: 260px; overflow: auto; margin: 0; padding: 13px 14px; border-top: 1px solid #252936; background: #090b0f; color: #aeb5c6; font: 10px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 
 .sync-run-screen {

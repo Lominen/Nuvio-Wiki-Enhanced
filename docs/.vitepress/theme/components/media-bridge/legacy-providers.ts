@@ -31,6 +31,7 @@ import {
   errorDetail,
   mapLimit,
   requestBridgeJson,
+  retryBridgeOperation,
   sleep,
   waitForWriteSlot,
   type AsyncLimiter
@@ -56,6 +57,9 @@ const SIMKL_PROGRESS_IMPORT_TIMEOUT_MS = 30_000
 const NUVIO_METADATA_BATCH_SIZE = 400
 const NUVIO_METADATA_BATCH_CONCURRENCY = 4
 const NUVIO_KITSU_SEARCH_CONCURRENCY = 6
+const LOCAL_SERVER_WRITE_CONCURRENCY = 4
+const NUVIO_WRITE_CONCURRENCY = 3
+const STREMIO_WRITE_CONCURRENCY = 2
 
 const SIMKL_EXTERNAL_ID_NAMESPACES = [
   'mal',
@@ -255,14 +259,25 @@ export interface PushOptions extends PullOptions {
 }
 
 const traktTokenRefreshes = new WeakMap<object, Promise<string>>()
+const nuvioTokenRefreshes = new WeakMap<object, Promise<string>>()
 
 const traktReadLimiters = new WeakMap<object, AsyncLimiter>()
+const nuvioWriteLimiters = new WeakMap<object, AsyncLimiter>()
 
 function traktReadLimiter(credentials: object): AsyncLimiter {
   let limiter = traktReadLimiters.get(credentials)
   if (!limiter) {
     limiter = createAsyncLimiter(TRAKT_READ_CONCURRENCY)
     traktReadLimiters.set(credentials, limiter)
+  }
+  return limiter
+}
+
+function nuvioWriteLimiter(credentials: object): AsyncLimiter {
+  let limiter = nuvioWriteLimiters.get(credentials)
+  if (!limiter) {
+    limiter = createAsyncLimiter(NUVIO_WRITE_CONCURRENCY)
+    nuvioWriteLimiters.set(credentials, limiter)
   }
   return limiter
 }
@@ -681,19 +696,30 @@ async function ensureNuvioToken(connection: BridgeConnection): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
   if (!expiresAt || now < expiresAt - 90) return session.access_token
   if (!session.refresh_token) throw new Error('The Nuvio session expired. Reconnect the account.')
-  const { data } = await requestBridgeJson<NuvioSession>(
+  const currentRefresh = nuvioTokenRefreshes.get(credentials)
+  if (currentRefresh) return currentRefresh
+  const refresh = requestBridgeJson<NuvioSession>(
     `${NUVIO_API}/auth/v1/token?grant_type=refresh_token`,
     {
       method: 'POST',
       headers: { apikey: credentials.publicKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: session.refresh_token })
     }
-  )
-  credentials.session = {
-    ...data,
-    expires_at: data.expires_at || (data.expires_in ? now + Number(data.expires_in) : 0)
+  ).then(({ data }) => {
+    credentials.session = {
+      ...data,
+      expires_at: data.expires_at || (data.expires_in ? now + Number(data.expires_in) : 0)
+    }
+    return credentials.session.access_token
+  })
+  nuvioTokenRefreshes.set(credentials, refresh)
+  try {
+    return await refresh
+  } finally {
+    if (nuvioTokenRefreshes.get(credentials) === refresh) {
+      nuvioTokenRefreshes.delete(credentials)
+    }
   }
-  return credentials.session.access_token
 }
 
 export async function nuvioRpc(
@@ -702,17 +728,22 @@ export async function nuvioRpc(
   body: Record<string, any> = {}
 ): Promise<any> {
   if (connection.credentials.service !== 'nuvio') throw new Error('Expected Nuvio credentials.')
-  const token = await ensureNuvioToken(connection)
-  const { data } = await requestBridgeJson(`${NUVIO_API}/rest/v1/rpc/${name}`, {
-    method: 'POST',
-    headers: {
-      apikey: connection.credentials.publicKey,
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
+  const request = () => retryBridgeOperation(async () => {
+    const token = await ensureNuvioToken(connection)
+    const { data } = await requestBridgeJson(`${NUVIO_API}/rest/v1/rpc/${name}`, {
+      method: 'POST',
+      headers: {
+        apikey: connection.credentials.publicKey,
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    })
+    return data
   })
-  return data
+  return /^sync_(?:push|delete)_/.test(name)
+    ? nuvioWriteLimiter(connection.credentials)(request)
+    : request()
 }
 
 export async function nuvioRest(
@@ -775,13 +806,13 @@ async function simklRequest(
     const rateLimited = error?.status === 429
       || (error?.status === 400 && rateLimitCode === 'RATE_LIMIT')
       || rateLimitCode === 'RATE_LIMIT'
-    if (!isWrite || !rateLimited) throw error
+    if (!rateLimited) throw error
     const retrySeconds = Math.max(
-      20,
+      isWrite ? 20 : 1,
       Number(error.headers?.get?.('retry-after') || 0)
     )
     await sleep(retrySeconds * 1000, options.signal)
-    await waitForWriteSlot(connection.credentials, minimumWriteGapMs)
+    if (isWrite) await waitForWriteSlot(connection.credentials, minimumWriteGapMs)
     return requestBridgeJson(url.toString(), requestOptions)
   }
 }
@@ -792,11 +823,14 @@ export async function stremioRequest(
   body: Record<string, any>
 ): Promise<any> {
   if (connection.credentials.service !== 'stremio') throw new Error('Expected Stremio credentials.')
-  const { data } = await requestBridgeJson(`${STREMIO_API}/${path.replace(/^\//, '')}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ authKey: connection.credentials.authKey, ...body })
-  })
+  const { data } = await retryBridgeOperation(() => requestBridgeJson(
+    `${STREMIO_API}/${path.replace(/^\//, '')}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authKey: connection.credentials.authKey, ...body })
+    }
+  ))
   if (data?.error) throw new Error(errorDetail(data.error, 'Stremio request failed'))
   return data?.result ?? data
 }
@@ -941,7 +975,7 @@ async function plexRequest(
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
   }
-  return requestBridgeJson(url.toString(), {
+  return retryBridgeOperation(() => requestBridgeJson(url.toString(), {
     ...options,
     headers: {
       ...plexHeaders(
@@ -951,7 +985,7 @@ async function plexRequest(
       'X-Plex-Pms-Api-Version': '1.0',
       ...(options.headers || {})
     }
-  })
+  }))
 }
 
 function plexRows(data: any): any[] {
@@ -1101,14 +1135,14 @@ async function jellyfinRequest(
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
   }
-  return requestBridgeJson(url.toString(), {
+  return retryBridgeOperation(() => requestBridgeJson(url.toString(), {
     ...options,
     headers: {
       ...jellyfinHeaders(connection.credentials.deviceId, connection.credentials.accessToken),
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {})
     }
-  })
+  }))
 }
 
 async function jellyfinRequestWithLegacy(
@@ -1665,27 +1699,36 @@ async function pushPlex(options: PushOptions): Promise<PushResult> {
   const confirmedScopes: BridgeScope[] = []
 
   if (scopes.history) {
-    for (const record of collapseHistoryToWatchedState(bundle.history)) {
-      const resolved = resolvePlexEntry(record.media, catalog, 'history')
-      if (!resolved.entry) {
-        skipped.history++
-        if (resolved.issue) issues.push(resolved.issue)
-        continue
+    const outcomes = await mapLimit(
+      collapseHistoryToWatchedState(bundle.history),
+      LOCAL_SERVER_WRITE_CONCURRENCY,
+      async record => {
+        const resolved = resolvePlexEntry(record.media, catalog, 'history')
+        if (!resolved.entry) return { written: false, issue: resolved.issue }
+        try {
+          await plexRequest(connection, '/:/scrobble', {
+            identifier: 'com.plexapp.plugins.library',
+            key: resolved.entry.ratingKey
+          }, { method: 'PUT' })
+          return { written: true }
+        } catch (error: any) {
+          return {
+            written: false,
+            issue: {
+              scope: 'history' as const,
+              status: 'warning' as const,
+              media: record.media,
+              reason: `Plex could not mark this item watched: ${errorDetail(error?.body, error?.message)}`
+            }
+          }
+        }
       }
-      try {
-        await plexRequest(connection, '/:/scrobble', {
-          identifier: 'com.plexapp.plugins.library',
-          key: resolved.entry.ratingKey
-        }, { method: 'PUT' })
-        written.history++
-      } catch (error: any) {
+    )
+    for (const outcome of outcomes) {
+      if (outcome.written) written.history++
+      else {
         skipped.history++
-        issues.push({
-          scope: 'history',
-          status: 'warning',
-          media: record.media,
-          reason: `Plex could not mark this item watched: ${errorDetail(error?.body, error?.message)}`
-        })
+        if ('issue' in outcome && outcome.issue) issues.push(outcome.issue)
       }
     }
     confirmedScopes.push('history')
@@ -1693,13 +1736,9 @@ async function pushPlex(options: PushOptions): Promise<PushResult> {
   }
 
   if (scopes.progress) {
-    for (const record of bundle.progress) {
+    const outcomes = await mapLimit(bundle.progress, LOCAL_SERVER_WRITE_CONCURRENCY, async record => {
       const resolved = resolvePlexEntry(record.media, catalog, 'progress')
-      if (!resolved.entry) {
-        skipped.progress++
-        if (resolved.issue) issues.push(resolved.issue)
-        continue
-      }
+      if (!resolved.entry) return { written: false, issue: resolved.issue }
       const absolute = absoluteProgress(record)
       const durationMs = absolute?.durationMs || resolved.entry.duration
       const percentage = progressPercentage(record)
@@ -1707,14 +1746,15 @@ async function pushPlex(options: PushOptions): Promise<PushResult> {
         ? Math.round(durationMs * percentage / 100)
         : 0)
       if (!durationMs || !positionMs) {
-        skipped.progress++
-        issues.push({
-          scope: 'progress',
-          status: 'unresolved',
-          media: record.media,
-          reason: 'Plex progress needs a valid position and duration.'
-        })
-        continue
+        return {
+          written: false,
+          issue: {
+            scope: 'progress' as const,
+            status: 'unresolved' as const,
+            media: record.media,
+            reason: 'Plex progress needs a valid position and duration.'
+          }
+        }
       }
       try {
         await plexRequest(connection, '/:/timeline', {
@@ -1729,15 +1769,24 @@ async function pushPlex(options: PushOptions): Promise<PushResult> {
           method: 'POST',
           headers: { 'X-Plex-Session-Identifier': createClientIdentifier() }
         })
-        written.progress++
+        return { written: true }
       } catch (error: any) {
+        return {
+          written: false,
+          issue: {
+            scope: 'progress' as const,
+            status: 'warning' as const,
+            media: record.media,
+            reason: `Plex could not update this resume point: ${errorDetail(error?.body, error?.message)}`
+          }
+        }
+      }
+    })
+    for (const outcome of outcomes) {
+      if (outcome.written) written.progress++
+      else {
         skipped.progress++
-        issues.push({
-          scope: 'progress',
-          status: 'warning',
-          media: record.media,
-          reason: `Plex could not update this resume point: ${errorDetail(error?.body, error?.message)}`
-        })
+        if ('issue' in outcome && outcome.issue) issues.push(outcome.issue)
       }
     }
     confirmedScopes.push('progress')
@@ -2094,33 +2143,42 @@ async function pushJellyfin(options: PushOptions): Promise<PushResult> {
   const confirmedScopes: BridgeScope[] = []
 
   if (scopes.history) {
-    for (const record of collapseHistoryToWatchedState(bundle.history)) {
-      const resolved = resolveJellyfinEntry(record.media, catalog, 'history')
-      if (!resolved.entry) {
-        skipped.history++
-        if (resolved.issue) issues.push(resolved.issue)
-        continue
+    const outcomes = await mapLimit(
+      collapseHistoryToWatchedState(bundle.history),
+      LOCAL_SERVER_WRITE_CONCURRENCY,
+      async record => {
+        const resolved = resolveJellyfinEntry(record.media, catalog, 'history')
+        if (!resolved.entry) return { written: false, issue: resolved.issue }
+        try {
+          await jellyfinRequestWithLegacy(
+            connection,
+            `/UserPlayedItems/${encodeURIComponent(resolved.entry.itemId)}`,
+            `/Users/${encodeURIComponent(credentials.userId)}/PlayedItems/${encodeURIComponent(resolved.entry.itemId)}`,
+            {
+              userId: credentials.userId,
+              datePlayed: new Date(record.watchedAt || Date.now()).toISOString()
+            },
+            { method: 'POST' }
+          )
+          return { written: true }
+        } catch (error: any) {
+          return {
+            written: false,
+            issue: {
+              scope: 'history' as const,
+              status: 'warning' as const,
+              media: record.media,
+              reason: `Jellyfin could not mark this item watched: ${errorDetail(error?.body, error?.message)}`
+            }
+          }
+        }
       }
-      try {
-        await jellyfinRequestWithLegacy(
-          connection,
-          `/UserPlayedItems/${encodeURIComponent(resolved.entry.itemId)}`,
-          `/Users/${encodeURIComponent(credentials.userId)}/PlayedItems/${encodeURIComponent(resolved.entry.itemId)}`,
-          {
-            userId: credentials.userId,
-            datePlayed: new Date(record.watchedAt || Date.now()).toISOString()
-          },
-          { method: 'POST' }
-        )
-        written.history++
-      } catch (error: any) {
+    )
+    for (const outcome of outcomes) {
+      if (outcome.written) written.history++
+      else {
         skipped.history++
-        issues.push({
-          scope: 'history',
-          status: 'warning',
-          media: record.media,
-          reason: `Jellyfin could not mark this item watched: ${errorDetail(error?.body, error?.message)}`
-        })
+        if ('issue' in outcome && outcome.issue) issues.push(outcome.issue)
       }
     }
     confirmedScopes.push('history')
@@ -2128,13 +2186,9 @@ async function pushJellyfin(options: PushOptions): Promise<PushResult> {
   }
 
   if (scopes.progress) {
-    for (const record of bundle.progress) {
+    const outcomes = await mapLimit(bundle.progress, LOCAL_SERVER_WRITE_CONCURRENCY, async record => {
       const resolved = resolveJellyfinEntry(record.media, catalog, 'progress')
-      if (!resolved.entry) {
-        skipped.progress++
-        if (resolved.issue) issues.push(resolved.issue)
-        continue
-      }
+      if (!resolved.entry) return { written: false, issue: resolved.issue }
       const absolute = absoluteProgress(record)
       const durationMs = absolute?.durationMs || resolved.entry.runTimeTicks / 10_000
       const percentage = progressPercentage(record)
@@ -2142,14 +2196,15 @@ async function pushJellyfin(options: PushOptions): Promise<PushResult> {
         ? Math.round(durationMs * percentage / 100)
         : 0)
       if (!durationMs || !positionMs) {
-        skipped.progress++
-        issues.push({
-          scope: 'progress',
-          status: 'unresolved',
-          media: record.media,
-          reason: 'Jellyfin progress needs a valid position and duration.'
-        })
-        continue
+        return {
+          written: false,
+          issue: {
+            scope: 'progress' as const,
+            status: 'unresolved' as const,
+            media: record.media,
+            reason: 'Jellyfin progress needs a valid position and duration.'
+          }
+        }
       }
       const clampedPositionMs = Math.max(1, Math.min(positionMs, durationMs - 1))
       const userData = resolved.entry.userData
@@ -2172,15 +2227,24 @@ async function pushJellyfin(options: PushOptions): Promise<PushResult> {
           { userId: credentials.userId },
           { method: 'POST', body: JSON.stringify(body) }
         )
-        written.progress++
+        return { written: true }
       } catch (error: any) {
+        return {
+          written: false,
+          issue: {
+            scope: 'progress' as const,
+            status: 'warning' as const,
+            media: record.media,
+            reason: `Jellyfin could not update this resume point: ${errorDetail(error?.body, error?.message)}`
+          }
+        }
+      }
+    })
+    for (const outcome of outcomes) {
+      if (outcome.written) written.progress++
+      else {
         skipped.progress++
-        issues.push({
-          scope: 'progress',
-          status: 'warning',
-          media: record.media,
-          reason: `Jellyfin could not update this resume point: ${errorDetail(error?.body, error?.message)}`
-        })
+        if ('issue' in outcome && outcome.issue) issues.push(outcome.issue)
       }
     }
     confirmedScopes.push('progress')
@@ -2627,7 +2691,7 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
   const issues: BridgeIssue[] = []
   const provenance = sourceOf(connection)
 
-  if (scopes.history) {
+  const historyRequest = scopes.history ? (async () => {
     logTo(log, 'Reading Nuvio watched items...')
     for (let page = 1; page <= 200; page++) {
       const rows = await nuvioRpc(connection, 'sync_pull_watched_items', {
@@ -2649,9 +2713,9 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
       }
       if (batch.length < 500) break
     }
-  }
+  })() : Promise.resolve()
 
-  if (scopes.progress) {
+  const progressRequest = scopes.progress ? (async () => {
     logTo(log, 'Reading Nuvio resume points...')
     const rows = await nuvioRpc(connection, 'sync_pull_watch_progress', {
       p_profile_id: profileId,
@@ -2685,9 +2749,9 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
         reason: 'Nuvio returned the 100,000-item resume-point limit; additional older progress records may not be transferable.'
       })
     }
-  }
+  })() : Promise.resolve()
 
-  if (scopes.library) {
+  const libraryRequest = scopes.library ? (async () => {
     logTo(log, 'Reading Nuvio library...')
     for (let offset = 0; offset < 100_000; offset += 500) {
       const rows = await nuvioRpc(connection, 'sync_pull_library', {
@@ -2712,7 +2776,9 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
       }
       if (batch.length < 500) break
     }
-  }
+  })() : Promise.resolve()
+
+  await Promise.all([historyRequest, progressRequest, libraryRequest])
 
   const pulledRecords = [
     ...bundle.history,
@@ -3046,7 +3112,7 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
   ]
   const metadataByMedia = await loadBridgeMetadata(metadataMedia, log)
 
-  if (scopes.history && watchedRecords.length) {
+  const historyWrite = scopes.history && watchedRecords.length ? (async () => {
     const rows: any[] = []
     const legacyKeys = new Map<string, Record<string, any>>()
     for (const record of watchedRecords) {
@@ -3083,14 +3149,17 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         p_keys: [...legacyKeys.values()]
       })
     }
-    for (const rowsBatch of chunk(rows, 500)) {
-      await nuvioRpc(connection, 'sync_push_watched_items', { p_profile_id: profileId, p_items: rowsBatch })
-      written.history += rowsBatch.length
-    }
+    await Promise.all(chunk(rows, 500).map(async rowsBatch => {
+      await nuvioRpc(connection, 'sync_push_watched_items', {
+        p_profile_id: profileId,
+        p_items: rowsBatch
+      })
+    }))
+    written.history += rows.length
     logTo(log, `Added ${written.history} Nuvio watched items.`)
-  }
+  })() : Promise.resolve()
 
-  if (scopes.progress && bundle.progress.length) {
+  const progressWrite = scopes.progress && bundle.progress.length ? (async () => {
     const rows: any[] = []
     const legacyKeys = new Set<string>()
     for (const record of bundle.progress) {
@@ -3130,14 +3199,17 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         p_keys: [...legacyKeys]
       })
     }
-    for (const rowsBatch of chunk(rows, 300)) {
-      await nuvioRpc(connection, 'sync_push_watch_progress', { p_profile_id: profileId, p_entries: rowsBatch })
-      written.progress += rowsBatch.length
-    }
+    await Promise.all(chunk(rows, 300).map(async rowsBatch => {
+      await nuvioRpc(connection, 'sync_push_watch_progress', {
+        p_profile_id: profileId,
+        p_entries: rowsBatch
+      })
+    }))
+    written.progress += rows.length
     logTo(log, `Updated ${written.progress} Nuvio resume points.`)
-  }
+  })() : Promise.resolve()
 
-  if (scopes.library && bundle.library.length) {
+  const libraryWrite = scopes.library && bundle.library.length ? (async () => {
     logTo(log, 'Merging with the full destination Nuvio library...')
     const existing = await pullEntireNuvioLibrary(connection, profileId)
     const merged = new Map<string, any>()
@@ -3188,7 +3260,9 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
       })
     }
     logTo(log, `Merged ${written.library} titles into the Nuvio library without removing unrelated items.`)
-  }
+  })() : Promise.resolve()
+
+  await Promise.all([historyWrite, progressWrite, libraryWrite])
 
   return { written, skipped, issues }
 }
@@ -3338,18 +3412,31 @@ async function pullSimkl(options: PullOptions): Promise<PullResult> {
   const issues: BridgeIssue[] = []
   const provenance = sourceOf(connection)
 
-  if (scopes.history || scopes.library) {
-    logTo(log, 'Reading Simkl movies, shows, and anime sequentially...')
-    for (const bucket of ['movies', 'shows', 'anime'] as const) {
-      const { data } = await simklRequest(connection, `/sync/all-items/${bucket}`, simklItemParams(scopes))
-      appendSimklItems(data, bucket, scopes, bundle, provenance)
-    }
-  }
+  const itemBuckets = scopes.history || scopes.library
+    ? (['movies', 'shows', 'anime'] as const)
+    : []
+  if (itemBuckets.length) logTo(log, 'Reading Simkl movies, shows, and anime concurrently...')
+  if (scopes.progress) logTo(log, 'Reading Simkl playback sessions...')
 
-  if (scopes.progress) {
-    logTo(log, 'Reading Simkl playback sessions...')
-    const { data } = await simklRequest(connection, '/sync/playback')
-    appendSimklPlayback(data, bundle, issues, provenance)
+  const [itemResponses, playbackResponse] = await Promise.all([
+    Promise.all(itemBuckets.map(async bucket => ({
+      bucket,
+      data: (await simklRequest(
+        connection,
+        `/sync/all-items/${bucket}`,
+        simklItemParams(scopes)
+      )).data
+    }))),
+    scopes.progress
+      ? simklRequest(connection, '/sync/playback')
+      : Promise.resolve(null)
+  ])
+
+  for (const { bucket, data } of itemResponses) {
+    appendSimklItems(data, bucket, scopes, bundle, provenance)
+  }
+  if (playbackResponse) {
+    appendSimklPlayback(playbackResponse.data, bundle, issues, provenance)
   }
 
   return { bundle: dedupeBundle(bundle), issues }
@@ -3363,14 +3450,22 @@ async function pullSimklDelta(options: PullOptions, dateFrom: string): Promise<P
 
   if (scopes.history || scopes.library) {
     logTo(log, 'Simkl activity changed; reading the destination delta...')
-    const { data } = await simklRequest(connection, '/sync/all-items', simklItemParams(scopes, dateFrom))
+  }
+  const [itemsResponse, playbackResponse] = await Promise.all([
+    scopes.history || scopes.library
+      ? simklRequest(connection, '/sync/all-items', simklItemParams(scopes, dateFrom))
+      : Promise.resolve(null),
+    scopes.progress
+      ? simklRequest(connection, '/sync/playback')
+      : Promise.resolve(null)
+  ])
+  if (itemsResponse) {
     for (const bucket of ['movies', 'shows', 'anime'] as const) {
-      appendSimklItems(data, bucket, scopes, bundle, provenance)
+      appendSimklItems(itemsResponse.data, bucket, scopes, bundle, provenance)
     }
   }
-  if (scopes.progress) {
-    const { data } = await simklRequest(connection, '/sync/playback')
-    appendSimklPlayback(data, bundle, issues, provenance)
+  if (playbackResponse) {
+    appendSimklPlayback(playbackResponse.data, bundle, issues, provenance)
   }
 
   return { bundle: dedupeBundle(bundle), issues }
@@ -4057,21 +4152,17 @@ async function pushStremio(options: PushOptions): Promise<PushResult> {
   const currentItems = Array.isArray(currentRows) ? currentRows : []
   const current = new Map<string, any>(currentItems.map((item: any) => [String(item._id), item]))
   const currentMedia = currentItems.map(mediaFromStremioItem)
-  const currentMetadata = await loadBridgeMetadata(
-    currentMedia.filter(media => !/^tt\d+$/i.test(String(media.ids.imdb || ''))),
-    log
-  )
-  const progressRuntimeMetadata = scopes.progress
-    ? await loadBridgeMetadata(
-        bundle.progress
-          .filter(record => !absoluteProgress(record))
-          .map(record => record.media),
-        log
-      )
-    : new Map<MediaRef, BridgeMetadataResult>()
+  const bridgeMetadata = await loadBridgeMetadata([
+    ...currentMedia.filter(media => !/^tt\d+$/i.test(String(media.ids.imdb || ''))),
+    ...(scopes.progress
+      ? bundle.progress
+        .filter(record => !absoluteProgress(record))
+        .map(record => record.media)
+      : [])
+  ], log)
   const currentByAlias = new Map<string, any>()
   currentItems.forEach((item: any, index: number) => {
-    const media = withResolvedExternalIds(currentMedia[index], currentMetadata.get(currentMedia[index]))
+    const media = withResolvedExternalIds(currentMedia[index], bridgeMetadata.get(currentMedia[index]))
     for (const alias of mediaAliasKeys(media)) {
       if (!currentByAlias.has(alias)) currentByAlias.set(alias, item)
     }
@@ -4152,7 +4243,7 @@ async function pushStremio(options: PushOptions): Promise<PushResult> {
         const absolute = absoluteProgress(
           latest,
           positiveNumber(existing?.state?.duration)
-            || positiveNumber(progressRuntimeMetadata.get(latest.media)?.runtimeMs)
+            || positiveNumber(bridgeMetadata.get(latest.media)?.runtimeMs)
         )
         if (!absolute) {
           issues.push({ scope: 'progress', status: 'unresolved', media: latest.media, reason: 'Stremio needs a reliable runtime to convert this percentage.' })
@@ -4226,7 +4317,7 @@ async function pushStremio(options: PushOptions): Promise<PushResult> {
         const absolute = absoluteProgress(
           latest,
           positiveNumber(existing?.state?.duration)
-            || positiveNumber(progressRuntimeMetadata.get(latest.media)?.runtimeMs)
+            || positiveNumber(bridgeMetadata.get(latest.media)?.runtimeMs)
         )
         if (!absolute) {
           issues.push({ scope: 'progress', status: 'unresolved', media: latest.media, reason: 'Stremio needs a reliable runtime to convert this percentage.' })
@@ -4244,12 +4335,12 @@ async function pushStremio(options: PushOptions): Promise<PushResult> {
     return item
   })).filter(Boolean)
 
-  for (const changesBatch of chunk(changes, 100)) {
-    await stremioRequest(connection, '/datastorePut', {
+  await mapLimit(chunk(changes, 100), STREMIO_WRITE_CONCURRENCY, changesBatch => (
+    stremioRequest(connection, '/datastorePut', {
       collection: 'libraryItem',
       changes: changesBatch
     })
-  }
+  ))
   logTo(log, `Merged ${changes.length} Stremio library-state records.`)
   return {
     written,

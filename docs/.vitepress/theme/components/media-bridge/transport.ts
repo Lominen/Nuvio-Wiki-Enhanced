@@ -5,6 +5,14 @@ export interface JsonResponse<T = any> {
 
 export type AsyncLimiter = <T>(operation: () => Promise<T>) => Promise<T>
 
+export interface RetryBridgeOperationOptions {
+  retries?: number
+  baseDelayMs?: number
+  maxDelayMs?: number
+  signal?: AbortSignal
+  shouldRetry?: (error: any) => boolean
+}
+
 const lastServiceWrite = new WeakMap<object, number>()
 
 export function createAsyncLimiter(concurrency: number): AsyncLimiter {
@@ -47,6 +55,45 @@ export function sleep(ms: number, signal?: AbortSignal) {
     }
     signal?.addEventListener('abort', onAbort, { once: true })
   })
+}
+
+function retryAfterMs(error: any): number {
+  const value = String(error?.headers?.get?.('retry-after') || '').trim()
+  if (!value) return 0
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000))
+  const retryAt = Date.parse(value)
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : 0
+}
+
+export function isTransientBridgeError(error: any): boolean {
+  const status = Number(error?.status)
+  return status === 408
+    || status === 425
+    || status === 429
+    || status >= 500
+    || error?.name === 'TimeoutError'
+    || error?.name === 'TypeError'
+}
+
+export async function retryBridgeOperation<T>(
+  operation: () => Promise<T>,
+  options: RetryBridgeOperationOptions = {}
+): Promise<T> {
+  const retries = Math.max(0, Math.floor(options.retries ?? 2))
+  const baseDelayMs = Math.max(0, Math.floor(options.baseDelayMs ?? 250))
+  const maxDelayMs = Math.max(baseDelayMs, Math.floor(options.maxDelayMs ?? 2_000))
+  const shouldRetry = options.shouldRetry || isTransientBridgeError
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation()
+    } catch (error: any) {
+      if (attempt >= retries || options.signal?.aborted || !shouldRetry(error)) throw error
+      const backoffMs = Math.min(maxDelayMs, baseDelayMs * (2 ** attempt))
+      await sleep(Math.max(backoffMs, retryAfterMs(error)), options.signal)
+    }
+  }
 }
 
 export function chunk<T>(items: readonly T[], size: number): T[][] {

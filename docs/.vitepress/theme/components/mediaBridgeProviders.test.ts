@@ -2513,3 +2513,352 @@ test('skips the Simkl destination reread when activities did not change', async 
   assert.equal(fetchMock.mock.callCount(), 1)
   assert.equal(result.bundle.history.length, 1)
 })
+
+test('reads all selected Simkl scopes concurrently', async t => {
+  let activeRequests = 0
+  let maximumActiveRequests = 0
+  const requestedPaths: string[] = []
+  const fetchMock = t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input))
+    requestedPaths.push(url.pathname)
+    activeRequests++
+    maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    activeRequests--
+    return Response.json([])
+  })
+  const connection = simklConnection()
+  connection.slot = 'source'
+
+  const result = await pullMediaBridge({
+    connection,
+    scopes: { history: true, progress: true, library: true }
+  })
+
+  assert.equal(fetchMock.mock.callCount(), 4)
+  assert.equal(maximumActiveRequests, 4)
+  assert.deepEqual(new Set(requestedPaths), new Set([
+    '/sync/all-items/movies',
+    '/sync/all-items/shows',
+    '/sync/all-items/anime',
+    '/sync/playback'
+  ]))
+  assert.deepEqual(result.bundle, createEmptyBundle())
+})
+
+test('refreshes Nuvio once while reading selected scopes concurrently', async t => {
+  const connection = nuvioConnection('source')
+  if (connection.credentials.service !== 'nuvio') throw new Error('Expected Nuvio credentials.')
+  connection.credentials.session = {
+    access_token: 'expired-token',
+    refresh_token: 'refresh-token',
+    expires_at: 1
+  }
+  let refreshRequests = 0
+  let activeRpcRequests = 0
+  let maximumActiveRpcRequests = 0
+  const rpcPaths: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/auth/v1/token') {
+      refreshRequests++
+      await new Promise(resolve => setTimeout(resolve, 10))
+      return Response.json({
+        access_token: 'refreshed-token',
+        refresh_token: 'next-refresh-token',
+        expires_in: 3_600
+      })
+    }
+    rpcPaths.push(url.pathname)
+    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer refreshed-token')
+    activeRpcRequests++
+    maximumActiveRpcRequests = Math.max(maximumActiveRpcRequests, activeRpcRequests)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    activeRpcRequests--
+    return Response.json([])
+  })
+
+  const result = await pullMediaBridge({
+    connection,
+    scopes: { history: true, progress: true, library: true }
+  })
+
+  assert.equal(refreshRequests, 1)
+  assert.equal(maximumActiveRpcRequests, 3)
+  assert.deepEqual(new Set(rpcPaths), new Set([
+    '/rest/v1/rpc/sync_pull_watched_items',
+    '/rest/v1/rpc/sync_pull_watch_progress',
+    '/rest/v1/rpc/sync_pull_library'
+  ]))
+  assert.deepEqual(result.bundle, createEmptyBundle())
+})
+
+test('bounds concurrent Nuvio write batches across history and progress', async t => {
+  let activeWrites = 0
+  let maximumActiveWrites = 0
+  const batchSizes: number[] = []
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input))
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/rest/v1/rpc/sync_push_watched_items') {
+      batchSizes.push(body.p_items.length)
+    } else if (url.pathname === '/rest/v1/rpc/sync_push_watch_progress') {
+      batchSizes.push(body.p_entries.length)
+    } else {
+      throw new Error(`Unexpected Nuvio request: ${url.pathname}`)
+    }
+    activeWrites++
+    maximumActiveWrites = Math.max(maximumActiveWrites, activeWrites)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    activeWrites--
+    return Response.json(null)
+  })
+  const bundle = createEmptyBundle()
+  for (let index = 0; index < 1_501; index++) {
+    const imdb = `tt${String(index + 1).padStart(7, '0')}`
+    bundle.history.push(movieHistory(`History ${index + 1}`, imdb, Date.UTC(2026, 6, 17)))
+  }
+  for (let index = 0; index < 601; index++) {
+    const imdb = `tt${String(index + 20_000).padStart(7, '0')}`
+    bundle.progress.push({
+      media: { kind: 'movie', ids: { imdb }, title: `Progress ${index + 1}` },
+      positionMs: 1_000,
+      durationMs: 10_000,
+      updatedAt: Date.UTC(2026, 6, 17)
+    })
+  }
+
+  const result = await pushMediaBridge({
+    connection: nuvioConnection(),
+    bundle,
+    scopes: { history: true, progress: true, library: false }
+  })
+
+  assert.equal(fetchMock.mock.callCount(), 7)
+  assert.equal(maximumActiveWrites, 3)
+  assert.deepEqual(batchSizes.sort((left, right) => left - right), [1, 1, 300, 300, 500, 500, 500])
+  assert.equal(result.written.history, 1_501)
+  assert.equal(result.written.progress, 601)
+  assert.deepEqual(result.issues, [])
+})
+
+test('retries transient Plex writes with bounded local-server concurrency', async t => {
+  const records = Array.from({ length: 6 }, (_, index) => {
+    const imdb = `tt${String(index + 40_000).padStart(7, '0')}`
+    return {
+      imdb,
+      ratingKey: String(index + 101),
+      title: `Plex ${index + 1}`
+    }
+  })
+  let activeWrites = 0
+  let maximumActiveWrites = 0
+  let writeAttempts = 0
+  let retried = false
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input))
+    if (url.pathname === '/library/sections') {
+      return Response.json({
+        MediaContainer: { Directory: [{ key: '1', title: 'Movies', type: 'movie' }] }
+      })
+    }
+    if (url.pathname === '/library/sections/1/all') {
+      return Response.json({
+        MediaContainer: {
+          totalSize: records.length,
+          Metadata: records.map(record => ({
+            ratingKey: record.ratingKey,
+            key: `/library/metadata/${record.ratingKey}`,
+            guid: `plex://movie/${record.ratingKey}`,
+            Guid: [{ id: `imdb://${record.imdb}` }],
+            type: 'movie',
+            title: record.title,
+            year: 2024
+          }))
+        }
+      })
+    }
+    if (url.pathname === '/:/scrobble') {
+      writeAttempts++
+      activeWrites++
+      maximumActiveWrites = Math.max(maximumActiveWrites, activeWrites)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      activeWrites--
+      if (!retried && url.searchParams.get('key') === '101') {
+        retried = true
+        return new Response(JSON.stringify({ message: 'busy' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json', 'Retry-After': '0' }
+        })
+      }
+      return Response.json({ MediaContainer: { size: 0 } })
+    }
+    throw new Error(`Unexpected Plex request: ${url}`)
+  })
+  const bundle = createEmptyBundle()
+  for (const record of records) {
+    bundle.history.push(movieHistory(record.title, record.imdb, Date.UTC(2026, 6, 17)))
+  }
+
+  const result = await pushMediaBridge({
+    connection: plexConnection(),
+    bundle,
+    scopes: { history: true, progress: false, library: false }
+  })
+
+  assert.equal(writeAttempts, 7)
+  assert.equal(maximumActiveWrites, 4)
+  assert.equal(result.written.history, 6)
+  assert.deepEqual(result.issues, [])
+})
+
+test('bounds concurrent Jellyfin writes per server', async t => {
+  const records = Array.from({ length: 6 }, (_, index) => {
+    const imdb = `tt${String(index + 50_000).padStart(7, '0')}`
+    return { imdb, itemId: `movie-${index + 1}`, title: `Jellyfin ${index + 1}` }
+  })
+  let activeWrites = 0
+  let maximumActiveWrites = 0
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input))
+    if (url.pathname === '/Items') {
+      return Response.json({
+        TotalRecordCount: records.length,
+        Items: records.map(record => ({
+          Id: record.itemId,
+          Type: 'Movie',
+          Name: record.title,
+          ProductionYear: 2024,
+          ProviderIds: { Imdb: record.imdb },
+          UserData: {}
+        }))
+      })
+    }
+    if (url.pathname.startsWith('/UserPlayedItems/')) {
+      activeWrites++
+      maximumActiveWrites = Math.max(maximumActiveWrites, activeWrites)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      activeWrites--
+      return Response.json({ Played: true })
+    }
+    throw new Error(`Unexpected Jellyfin request: ${url}`)
+  })
+  const bundle = createEmptyBundle()
+  for (const record of records) {
+    bundle.history.push(movieHistory(record.title, record.imdb, Date.UTC(2026, 6, 17)))
+  }
+
+  const result = await pushMediaBridge({
+    connection: jellyfinConnection(),
+    bundle,
+    scopes: { history: true, progress: false, library: false }
+  })
+
+  assert.equal(maximumActiveWrites, 4)
+  assert.equal(result.written.history, 6)
+  assert.deepEqual(result.issues, [])
+})
+
+test('combines Stremio metadata preparation into one enrichment batch', async t => {
+  let metadataRequests = 0
+  let metadataItems: any[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = init?.body ? JSON.parse(String(init.body)) : {}
+    if (url.pathname === '/api/datastoreGet') {
+      return Response.json({
+        result: [{
+          _id: 'tmdb:118340',
+          type: 'movie',
+          name: 'Existing TMDB title',
+          removed: false,
+          temp: false,
+          state: {}
+        }]
+      })
+    }
+    if (url.pathname === '/api/trakt/enrich-metadata') {
+      metadataRequests++
+      metadataItems = body.items
+      return Response.json({
+        results: body.items.map((item: any) => ({
+          content_id: item.content_id,
+          tmdbId: item._ids.tmdb,
+          imdbId: item._ids.imdb || (
+            String(item._ids.tmdb) === '118340' ? 'tt2015381' : undefined
+          ),
+          runtimeMs: 5_400_000,
+          source: 'tmdb'
+        }))
+      })
+    }
+    if (url.pathname === '/meta/movie/tt7654321.json') {
+      return Response.json({ meta: { id: 'tt7654321', name: 'Runtime conversion' } })
+    }
+    if (url.pathname === '/api/datastorePut') {
+      return Response.json({ result: { success: true } })
+    }
+    throw new Error(`Unexpected Stremio request: ${url.pathname}`)
+  })
+  const bundle = createEmptyBundle()
+  bundle.progress.push({
+    media: { kind: 'movie', ids: { imdb: 'tt7654321' }, title: 'Runtime conversion' },
+    percentage: 40,
+    updatedAt: Date.UTC(2026, 6, 17)
+  })
+
+  const result = await pushMediaBridge({
+    connection: stremioConnection(),
+    bundle,
+    scopes: { history: false, progress: true, library: false }
+  })
+
+  assert.equal(metadataRequests, 1)
+  assert.equal(metadataItems.length, 2)
+  assert.equal(result.written.progress, 1)
+  assert.deepEqual(result.issues, [])
+})
+
+test('writes Stremio datastore batches with concurrency two', async t => {
+  let activeWrites = 0
+  let maximumActiveWrites = 0
+  const batchSizes: number[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/api/datastoreGet') return Response.json({ result: [] })
+    if (url.pathname.startsWith('/meta/movie/')) {
+      const id = url.pathname.match(/(tt\d+)\.json$/)?.[1]
+      return Response.json({ meta: { id, name: id } })
+    }
+    if (url.pathname === '/api/datastorePut') {
+      const body = JSON.parse(String(init?.body || '{}'))
+      batchSizes.push(body.changes.length)
+      activeWrites++
+      maximumActiveWrites = Math.max(maximumActiveWrites, activeWrites)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      activeWrites--
+      return Response.json({ result: { success: true } })
+    }
+    throw new Error(`Unexpected Stremio request: ${url}`)
+  })
+  const bundle = createEmptyBundle()
+  for (let index = 0; index < 201; index++) {
+    const imdb = `tt${String(index + 60_000).padStart(7, '0')}`
+    bundle.library.push({
+      media: { kind: 'movie', ids: { imdb }, title: `Saved ${index + 1}` },
+      addedAt: Date.UTC(2026, 6, 17),
+      lists: [{ service: 'trakt', kind: 'watchlist' }]
+    })
+  }
+
+  const result = await pushMediaBridge({
+    connection: stremioConnection(),
+    bundle,
+    scopes: { history: false, progress: false, library: true }
+  })
+
+  assert.equal(maximumActiveWrites, 2)
+  assert.deepEqual(batchSizes.sort((left, right) => left - right), [1, 100, 100])
+  assert.equal(result.written.library, 201)
+  assert.deepEqual(result.issues, [])
+})
