@@ -199,9 +199,9 @@ const syncCopy = computed(() => isDutch.value ? {
   note: 'melding',
   notes: 'meldingen',
   moreAffected: 'meer',
-  supportMessage: 'Een ster geven is gratis en helpt anderen Sync Bridge te vinden.',
-  supportStarButton: 'Geef de repo een ster',
-  supportButton: 'Steun via Ko-fi'
+  supportMessage: 'Hopelijk heeft Sync Bridge het verplaatsen wat makkelijker gemaakt. Als het heeft geholpen, zou een GitHub-ster of een kop koffie veel betekenen.',
+  supportStarButton: 'Geef een GitHub-ster',
+  supportButton: 'Trakteer op koffie'
 } : {
   title: 'Sync Bridge',
   subtitle: 'Move watch history, playback progress, and saved titles between Simkl, Stremio, Trakt, Plex, Jellyfin, and Nuvio.',
@@ -320,9 +320,9 @@ const syncCopy = computed(() => isDutch.value ? {
   note: 'note',
   notes: 'notes',
   moreAffected: 'more',
-  supportMessage: 'Starring the repo is free and helps others find Sync Bridge.',
-  supportStarButton: 'Star the repo',
-  supportButton: 'Support on Ko-fi'
+  supportMessage: 'I hope Sync Bridge made the move a little easier. If it helped, a GitHub star or a coffee would mean a lot.',
+  supportStarButton: 'Leave a GitHub star',
+  supportButton: 'Buy me a coffee'
 })
 
 const copy = computed(() => {
@@ -2697,7 +2697,7 @@ td strong { color: var(--vp-c-text-1); font-weight: 650; }
 
 .sync-support-card {
   display: flex;
-  width: min(620px, 100%);
+  width: min(660px, 100%);
   align-items: center;
   justify-content: space-between;
   gap: 18px;
