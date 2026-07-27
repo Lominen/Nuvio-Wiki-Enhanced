@@ -199,8 +199,9 @@ const syncCopy = computed(() => isDutch.value ? {
   note: 'melding',
   notes: 'meldingen',
   moreAffected: 'meer',
-  supportMessage: 'If this helped you out or saved you some time, consider supporting me. ❤️',
-  supportButton: 'Support me on Ko-fi'
+  supportMessage: 'Een ster geven is gratis en helpt anderen Sync Bridge te vinden.',
+  supportStarButton: 'Geef de repo een ster',
+  supportButton: 'Steun via Ko-fi'
 } : {
   title: 'Sync Bridge',
   subtitle: 'Move watch history, playback progress, and saved titles between Simkl, Stremio, Trakt, Plex, Jellyfin, and Nuvio.',
@@ -319,8 +320,9 @@ const syncCopy = computed(() => isDutch.value ? {
   note: 'note',
   notes: 'notes',
   moreAffected: 'more',
-  supportMessage: 'If this helped you out or saved you some time, consider supporting me. ❤️',
-  supportButton: 'Support me on Ko-fi'
+  supportMessage: 'Starring the repo is free and helps others find Sync Bridge.',
+  supportStarButton: 'Star the repo',
+  supportButton: 'Support on Ko-fi'
 })
 
 const copy = computed(() => {
@@ -2043,15 +2045,26 @@ onBeforeUnmount(() => {
             </section>
             <div class="sync-support-card">
               <p>{{ copy.supportMessage }}</p>
-              <a
-                class="kofi-button"
-                href="https://ko-fi.com/haaihond"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <span aria-hidden="true">☕</span>
-                {{ copy.supportButton }}
-              </a>
+              <div class="sync-support-actions">
+                <a
+                  class="sync-support-button"
+                  href="https://github.com/haaihond/Nuvio-Wiki"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2.8 2.8 5.7 6.3.9-4.6 4.4 1.1 6.3-5.6-3-5.6 3 1.1-6.3-4.6-4.4 6.3-.9L12 2.8Z" /></svg>
+                  {{ copy.supportStarButton }}
+                </a>
+                <a
+                  class="sync-support-button"
+                  href="https://ko-fi.com/haaihond"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span aria-hidden="true">☕</span>
+                  {{ copy.supportButton }}
+                </a>
+              </div>
             </div>
           </div>
 
@@ -2683,40 +2696,57 @@ td strong { color: var(--vp-c-text-1); font-weight: 650; }
 .sync-run-note-repeat { padding: 3px 6px; }
 
 .sync-support-card {
-  width: min(660px, 100%);
-  margin-top: 34px;
-  padding: 26px;
-  border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 28%, var(--vp-c-divider));
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--vp-c-brand-soft) 55%, var(--vp-c-bg));
+  display: flex;
+  width: min(620px, 100%);
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 28px;
+  padding: 13px 15px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 11px;
+  background: var(--vp-c-bg-soft);
 }
 
 .sync-support-card p {
   margin: 0;
-  color: var(--vp-c-text-1);
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.55;
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.kofi-button {
+.sync-support-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.sync-support-button {
   display: inline-flex;
-  min-height: 46px;
+  min-height: 32px;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  margin-top: 18px;
-  padding: 0 19px;
-  border-radius: 9px;
-  background: #ff5e5b;
-  color: white !important;
-  font-size: 14px;
-  font-weight: 750;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 7px;
+  color: var(--vp-c-text-1) !important;
+  font-size: 11px;
+  font-weight: 600;
   text-decoration: none !important;
-  box-shadow: 0 10px 26px rgb(255 94 91 / 24%);
 }
 
-.kofi-button:hover { background: #e84e4b; }
+.sync-support-button svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.sync-support-button:hover {
+  border-color: var(--vp-c-text-3);
+  background: var(--vp-c-bg-mute);
+}
 
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
@@ -2763,7 +2793,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
   .sync-run-note-list { max-height: 190px; }
   .sync-run-note-list li { grid-template-columns: minmax(0, 1fr) auto; }
   .sync-run-note-scope { grid-column: 1 / -1; justify-self: start; }
-  .sync-support-card { padding: 22px 17px; }
+  .sync-support-card { align-items: flex-start; flex-direction: column; gap: 10px; padding: 13px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

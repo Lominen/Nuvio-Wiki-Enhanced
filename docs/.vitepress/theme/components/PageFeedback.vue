@@ -75,7 +75,7 @@ onMounted(restoreVote)
       </strong>
       <p v-if="choice !== null" role="status" aria-live="polite">
         <template v-if="choice">
-          {{ isDutch ? 'Fijn om te horen. Je kunt het project steunen via Ko-fi.' : 'Glad to hear it. Please consider supporting the project on Ko-fi ❤️' }}
+          {{ isDutch ? 'Fijn om te horen. Een ster geven is gratis, of steun het project via Ko-fi.' : 'Glad it helped. Starring the repo is free, or you can support the project on Ko-fi.' }}
         </template>
         <template v-else>
           {{ isDutch ? 'Bedankt — je antwoord helpt ons deze pagina te verbeteren.' : 'Thanks for the honest feedback. This helps me improve this page' }}
@@ -98,6 +98,16 @@ onMounted(restoreVote)
     </div>
 
     <div v-else class="page-feedback__response-actions">
+      <a
+        v-if="choice"
+        class="page-feedback__star"
+        href="https://github.com/haaihond/Nuvio-Wiki"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2.8 2.8 5.7 6.3.9-4.6 4.4 1.1 6.3-5.6-3-5.6 3 1.1-6.3-4.6-4.4 6.3-.9L12 2.8Z" /></svg>
+        {{ isDutch ? 'Geef een ster' : 'Star on GitHub' }}
+      </a>
       <a
         v-if="choice"
         class="page-feedback__donate"
@@ -177,6 +187,7 @@ onMounted(restoreVote)
 
 .page-feedback__choice,
 .page-feedback__retry,
+.page-feedback__star,
 .page-feedback__donate {
   display: inline-flex;
   align-items: center;
@@ -205,10 +216,25 @@ onMounted(restoreVote)
 }
 
 .page-feedback__choice svg,
+.page-feedback__star svg,
 .page-feedback__donate svg {
   width: 14px;
   height: 14px;
   fill: currentColor;
+}
+
+.page-feedback__star {
+  padding: 0 11px;
+  border: 1px solid var(--vp-c-divider);
+  background: transparent;
+  color: var(--vp-c-text-1);
+  text-decoration: none;
+}
+
+.page-feedback__star:hover {
+  border-color: var(--vp-c-text-3);
+  background: var(--vp-c-bg-mute);
+  color: var(--vp-c-text-1);
 }
 
 .page-feedback__donate {
@@ -227,6 +253,7 @@ onMounted(restoreVote)
 
 .page-feedback__choice:focus-visible,
 .page-feedback__retry:focus-visible,
+.page-feedback__star:focus-visible,
 .page-feedback__donate:focus-visible {
   outline: 2px solid var(--vp-c-brand-1);
   outline-offset: 2px;
