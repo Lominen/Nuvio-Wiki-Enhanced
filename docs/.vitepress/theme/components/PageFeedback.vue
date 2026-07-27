@@ -75,7 +75,7 @@ onMounted(restoreVote)
       </strong>
       <p v-if="choice !== null" role="status" aria-live="polite">
         <template v-if="choice">
-          {{ isDutch ? 'Fijn om te horen. Een ster geven is gratis, of steun het project via Ko-fi.' : 'Glad it helped. Starring the repo is free, or you can support the project on Ko-fi.' }}
+          {{ isDutch ? 'Fijn om te horen. Een ster geven is gratis, of steun het project via Ko-fi.' : 'Glad it helped. Consider supporting the project, starring the repo is free!' }}
         </template>
         <template v-else>
           {{ isDutch ? 'Bedankt — je antwoord helpt ons deze pagina te verbeteren.' : 'Thanks for the honest feedback. This helps me improve this page' }}
