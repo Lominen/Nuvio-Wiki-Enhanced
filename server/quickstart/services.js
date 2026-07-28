@@ -6,6 +6,7 @@ const NUVIO_BASE = 'https://api.nuvio.tv';
 const NUVIO_KEY = 'sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN';
 const AIOSTREAMS_BASE =
   'https://aiostreamsfortheweebs.midnightignite.me';
+const NUVIO_CATALOG_BASE = 'https://catalog.nuvio.tv/';
 const CINEMETA_MANIFEST = 'https://v3-cinemeta.strem.io/manifest.json';
 
 export class SetupError extends Error {
@@ -98,6 +99,66 @@ function jsonBody(value) {
   return {
     body: JSON.stringify(value),
   };
+}
+
+function normalizeManifestUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value ?? '').trim());
+  } catch {
+    throw new SetupError(
+      'Enter a valid HTTPS catalog or manifest URL.',
+      'details',
+      400
+    );
+  }
+
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password
+  ) {
+    throw new SetupError(
+      'Enter a valid HTTPS catalog or manifest URL.',
+      'details',
+      400
+    );
+  }
+
+  if (!/\/manifest\.json$/i.test(url.pathname)) {
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/manifest.json`;
+  }
+  url.hash = '';
+  return url.toString();
+}
+
+export function resolveCatalogAddon(input = {}) {
+  const mode = String(input.catalogMode ?? 'nuvio').trim().toLowerCase();
+
+  if (mode === 'none') return null;
+  if (mode === 'nuvio') {
+    return {
+      url: normalizeManifestUrl(NUVIO_CATALOG_BASE),
+      name: 'Nuvio Catalog',
+      enabled: true,
+    };
+  }
+  if (mode === 'cinemeta') {
+    return {
+      url: CINEMETA_MANIFEST,
+      name: 'Cinemeta',
+      enabled: true,
+    };
+  }
+  if (mode === 'custom') {
+    return {
+      url: normalizeManifestUrl(input.customCatalogUrl),
+      name: 'Custom catalog',
+      enabled: true,
+    };
+  }
+
+  throw new SetupError('Choose a valid catalog option.', 'details', 400);
 }
 
 export function formatTorBoxError(message, status) {
@@ -304,7 +365,8 @@ export async function installNuvioAddons(
   token,
   profiles,
   aiostreamsManifest,
-  aiostreamsName
+  aiostreamsName,
+  catalogAddon = resolveCatalogAddon()
 ) {
   const targets = profiles.filter((profile) => {
     const id = profileIndex(profile);
@@ -312,11 +374,7 @@ export async function installNuvioAddons(
   });
   const snapshots = [];
   const requested = [
-    {
-      url: CINEMETA_MANIFEST,
-      name: 'Cinemeta',
-      enabled: true,
-    },
+    ...(catalogAddon ? [catalogAddon] : []),
     {
       url: aiostreamsManifest,
       name: aiostreamsName || 'AIOStreams',
@@ -489,6 +547,7 @@ export async function runSetup(input, progress = () => {}) {
   const aiostreamsPassword = String(input.aiostreamsPassword ?? '');
   const tmdbApiKey = String(input.tmdbApiKey ?? '').trim();
   const tvdbApiKey = String(input.tvdbApiKey ?? '').trim();
+  const catalogAddon = resolveCatalogAddon(input);
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new SetupError('Enter a valid email address.', 'details', 400);
@@ -529,12 +588,17 @@ export async function runSetup(input, progress = () => {}) {
       tvdbApiKey,
     });
 
-    progress('addons', 'Installing AIOStreams and Cinemeta in Nuvio');
+    const addons = [
+      aiostreams.manifestName,
+      ...(catalogAddon ? [catalogAddon.name] : []),
+    ];
+    progress('addons', `Installing ${addons.join(' and ')} in Nuvio`);
     const installedProfiles = await installNuvioAddons(
       nuvio.token,
       profiles,
       aiostreams.manifestUrl,
-      aiostreams.manifestName
+      aiostreams.manifestName,
+      catalogAddon
     );
 
     progress('complete', 'Setup complete');
@@ -550,7 +614,7 @@ export async function runSetup(input, progress = () => {}) {
       tamTemplateVersion: aiostreams.templateVersion,
       metadataMatchingEnabled: aiostreams.metadataMatchingEnabled,
       torboxPlan: torboxUser.plan,
-      addons: ['Cinemeta', aiostreams.manifestName],
+      addons,
     };
   } catch (error) {
     if (aiostreams?.uuid) {
@@ -567,5 +631,7 @@ export async function runSetup(input, progress = () => {}) {
 
 export const serviceConstants = {
   aiostreamsBase: AIOSTREAMS_BASE,
+  nuvioCatalogBase: NUVIO_CATALOG_BASE,
+  nuvioCatalogManifest: normalizeManifestUrl(NUVIO_CATALOG_BASE),
   cinemetaManifest: CINEMETA_MANIFEST,
 };

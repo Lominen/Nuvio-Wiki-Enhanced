@@ -41,8 +41,22 @@ const translations = {
     aiostreamsPwdHelp: 'Keep this if you want to edit AIOStreams later.',
     aiostreamsPwdMinError: 'The AIOStreams config password must be at least 6 characters.',
     regenerate: 'Regenerate',
-    advanced: 'Advanced matching',
-    advancedSub: 'Optional TMDB and TVDB keys',
+    modeLabel: 'Setup mode',
+    simpleMode: 'Simple',
+    simpleModeDesc: 'Recommended defaults',
+    advancedMode: 'Advanced',
+    advancedModeDesc: 'Catalog and matching options',
+    advanced: 'Advanced options',
+    advancedSub: 'Only change what you need',
+    catalogLabel: 'Catalog addon',
+    catalogHelp: 'Nuvio Catalog is the default in both setup modes.',
+    catalogNuvio: 'Nuvio Catalog (recommended)',
+    catalogCinemeta: 'Cinemeta',
+    catalogNone: 'No catalog addon',
+    catalogCustom: 'Custom manifest URL',
+    customCatalogLabel: 'Catalog manifest URL',
+    customCatalogPlaceholder: 'https://example.com/manifest.json',
+    customCatalogError: 'Enter a valid HTTPS catalog or manifest URL.',
     advancedDesc: "Tam's metadata matching is enabled when a TMDB key is supplied. Without it, only those metadata-dependent filters are disabled.",
     tmdbLabel: 'TMDB API key',
     tvdbLabel: 'TVDB API key',
@@ -59,7 +73,7 @@ const translations = {
     readyTitle: 'Your Nuvio setup is ready',
     installs: 'Installs',
     addonAio: 'AIOStreams',
-    addonCinema: 'Cinemeta',
+    addonCatalog: 'Nuvio Catalog',
     manifestLabel: 'AIOStreams manifest',
     copy: 'Copy',
     copied: 'Copied',
@@ -105,8 +119,22 @@ const translations = {
     aiostreamsPwdHelp: 'Bewaar dit als je AIOStreams later wilt bewerken.',
     aiostreamsPwdMinError: 'Het AIOStreams-configuratiewachtwoord moet minimaal 6 tekens lang zijn.',
     regenerate: 'Genereer nieuwe',
-    advanced: 'Geavanceerd koppelen',
-    advancedSub: 'Optionele TMDB- en TVDB-sleutels',
+    modeLabel: 'Installatiemodus',
+    simpleMode: 'Eenvoudig',
+    simpleModeDesc: 'Aanbevolen standaardinstellingen',
+    advancedMode: 'Geavanceerd',
+    advancedModeDesc: 'Catalogus- en koppelopties',
+    advanced: 'Geavanceerde opties',
+    advancedSub: 'Wijzig alleen wat je nodig hebt',
+    catalogLabel: 'Catalogus-addon',
+    catalogHelp: 'Nuvio Catalog is de standaard in beide installatiemodi.',
+    catalogNuvio: 'Nuvio Catalog (aanbevolen)',
+    catalogCinemeta: 'Cinemeta',
+    catalogNone: 'Geen catalogus-addon',
+    catalogCustom: 'Aangepaste manifest-URL',
+    customCatalogLabel: 'Catalogus-manifest-URL',
+    customCatalogPlaceholder: 'https://voorbeeld.nl/manifest.json',
+    customCatalogError: 'Voer een geldige HTTPS-catalogus- of manifest-URL in.',
     advancedDesc: "Tam's metadata-koppeling wordt ingeschakeld wanneer een TMDB-sleutel wordt opgegeven. Zonder deze sleutel worden alleen de filters die afhankelijk zijn van metadata uitgeschakeld.",
     tmdbLabel: 'TMDB API-sleutel',
     tvdbLabel: 'TVDB API-sleutel',
@@ -123,7 +151,7 @@ const translations = {
     readyTitle: 'Je Nuvio-setup is gereed',
     installs: 'Installeert',
     addonAio: 'AIOStreams',
-    addonCinema: 'Cinemeta',
+    addonCatalog: 'Nuvio Catalog',
     manifestLabel: 'AIOStreams manifest',
     copy: 'Kopiëren',
     copied: 'Gekopieerd',
@@ -153,8 +181,11 @@ const t = computed(() => {
 
 // --- State Management ---
 type ViewMode = 'form' | 'progress' | 'result'
+type SetupMode = 'simple' | 'advanced'
+type CatalogMode = 'nuvio' | 'cinemeta' | 'none' | 'custom'
 const currentView = ref<ViewMode>('form')
 const isCollapsed = ref(!props.defaultExpanded)
+const setupMode = ref<SetupMode>('simple')
 
 const form = reactive({
   email: '',
@@ -162,19 +193,21 @@ const form = reactive({
   torboxApiKey: '',
   aiostreamsPassword: '',
   tmdbApiKey: '',
-  tvdbApiKey: ''
+  tvdbApiKey: '',
+  catalogMode: 'nuvio' as CatalogMode,
+  customCatalogUrl: ''
 })
 
 const errors = reactive({
   email: '',
   nuvioPassword: '',
   torboxApiKey: '',
-  aiostreamsPassword: ''
+  aiostreamsPassword: '',
+  customCatalogUrl: ''
 })
 
 const showNuvioPassword = ref(false)
 const showTorboxApiKey = ref(false)
-const advancedOpen = ref(false)
 
 const progressMessage = ref('Starting...')
 const activeStep = ref('details')
@@ -215,6 +248,11 @@ function generatePassword() {
   errors.aiostreamsPassword = ''
 }
 
+function setSetupMode(mode: SetupMode) {
+  setupMode.value = mode
+  errors.customCatalogUrl = ''
+}
+
 // Initialize password
 generatePassword()
 
@@ -224,6 +262,7 @@ function validateForm(): boolean {
   errors.nuvioPassword = ''
   errors.torboxApiKey = ''
   errors.aiostreamsPassword = ''
+  errors.customCatalogUrl = ''
 
   if (!form.email.trim()) {
     errors.email = t.value.emailReqError
@@ -248,6 +287,16 @@ function validateForm(): boolean {
     isValid = false
   }
 
+  if (setupMode.value === 'advanced' && form.catalogMode === 'custom') {
+    try {
+      const url = new URL(form.customCatalogUrl)
+      if (url.protocol !== 'https:') throw new Error()
+    } catch {
+      errors.customCatalogUrl = t.value.customCatalogError
+      isValid = false
+    }
+  }
+
   return isValid
 }
 
@@ -266,6 +315,9 @@ function startOver() {
   form.torboxApiKey = ''
   form.tmdbApiKey = ''
   form.tvdbApiKey = ''
+  form.catalogMode = 'nuvio'
+  form.customCatalogUrl = ''
+  setupMode.value = 'simple'
   generatePassword()
   globalError.value = null
   lastErrorField.value = null
@@ -286,7 +338,7 @@ function handleRetry() {
 // --- Setup Submission (SSE stream parsing) ---
 async function submitSetup() {
   if (!validateForm()) {
-    const firstInvalidField = (['email', 'nuvioPassword', 'torboxApiKey', 'aiostreamsPassword'] as const)
+    const firstInvalidField = (['email', 'nuvioPassword', 'torboxApiKey', 'aiostreamsPassword', 'customCatalogUrl'] as const)
       .find((field) => errors[field])
 
     if (firstInvalidField) {
@@ -306,12 +358,22 @@ async function submitSetup() {
   currentView.value = 'progress'
 
   try {
+    const payload = setupMode.value === 'simple'
+      ? {
+          ...form,
+          tmdbApiKey: '',
+          tvdbApiKey: '',
+          catalogMode: 'nuvio',
+          customCatalogUrl: ''
+        }
+      : { ...form }
+
     const response = await fetch(withBase('/api/ai/setup'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(form)
+      body: JSON.stringify(payload)
     })
 
     if (!response.ok) {
@@ -374,6 +436,10 @@ async function submitSetup() {
     } else if (step === 'details' && /password/i.test(errMsg)) {
       errors.nuvioPassword = errMsg
       lastErrorField.value = 'nuvioPassword'
+    } else if (step === 'details' && /(catalog|manifest|url)/i.test(errMsg)) {
+      errors.customCatalogUrl = errMsg
+      lastErrorField.value = 'customCatalogUrl'
+      setupMode.value = 'advanced'
     }
 
     currentView.value = 'form'
@@ -414,7 +480,7 @@ async function submitSetup() {
           </div>
           <div class="setup-summary" aria-label="Included in setup">
             <span><i class="summary-dot summary-dot--brand"></i>AIOStreams</span>
-            <span><i class="summary-dot"></i>Cinemeta</span>
+            <span><i class="summary-dot"></i>{{ t.addonCatalog }}</span>
             <span class="secure-pill">
               <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="8" width="12" height="9" rx="2" /><path d="M7 8V6a3 3 0 0 1 6 0v2" /></svg>
               {{ t.keysSecureNote }}
@@ -429,6 +495,27 @@ async function submitSetup() {
         </div>
 
         <form v-if="currentView === 'form'" class="setup-form" novalidate @submit.prevent="submitSetup">
+          <div class="mode-picker" role="group" :aria-label="t.modeLabel">
+            <button
+              type="button"
+              :class="{ active: setupMode === 'simple' }"
+              :aria-pressed="setupMode === 'simple'"
+              @click="setSetupMode('simple')"
+            >
+              <span>{{ t.simpleMode }}</span>
+              <small>{{ t.simpleModeDesc }}</small>
+            </button>
+            <button
+              type="button"
+              :class="{ active: setupMode === 'advanced' }"
+              :aria-pressed="setupMode === 'advanced'"
+              @click="setSetupMode('advanced')"
+            >
+              <span>{{ t.advancedMode }}</span>
+              <small>{{ t.advancedModeDesc }}</small>
+            </button>
+          </div>
+
           <section class="setup-panel">
             <div class="panel-heading">
               <div><h3>{{ t.nuvioAccount }}</h3><p>{{ t.newAccountsAuto }}</p></div>
@@ -477,12 +564,27 @@ async function submitSetup() {
             </a>
           </section>
 
-          <details class="advanced" :open="advancedOpen" @toggle="advancedOpen = ($event.target as any).open">
-            <summary>
-              <span><strong>{{ t.advanced }}</strong><small>{{ t.advancedSub }}</small></span>
-              <svg viewBox="0 0 20 20" aria-hidden="true" :class="{ rotated: advancedOpen }"><path d="m6 8 4 4 4-4" /></svg>
-            </summary>
+          <section v-if="setupMode === 'advanced'" class="advanced">
+            <div class="advanced-heading">
+              <div><h3>{{ t.advanced }}</h3><p>{{ t.advancedSub }}</p></div>
+              <span>{{ t.optional }}</span>
+            </div>
             <div class="advanced-fields">
+              <label class="field advanced-catalog">
+                <span>{{ t.catalogLabel }}</span>
+                <select v-model="form.catalogMode" @change="errors.customCatalogUrl = ''">
+                  <option value="nuvio">{{ t.catalogNuvio }}</option>
+                  <option value="cinemeta">{{ t.catalogCinemeta }}</option>
+                  <option value="none">{{ t.catalogNone }}</option>
+                  <option value="custom">{{ t.catalogCustom }}</option>
+                </select>
+                <em>{{ t.catalogHelp }}</em>
+              </label>
+              <label v-if="form.catalogMode === 'custom'" class="field advanced-catalog" :class="{ 'has-error': errors.customCatalogUrl }">
+                <span>{{ t.customCatalogLabel }}</span>
+                <input id="customCatalogUrl" v-model="form.customCatalogUrl" type="url" :placeholder="t.customCatalogPlaceholder" autocomplete="url" :aria-invalid="Boolean(errors.customCatalogUrl)" :aria-describedby="errors.customCatalogUrl ? 'custom-catalog-error' : undefined" @input="errors.customCatalogUrl = ''" />
+                <small v-if="errors.customCatalogUrl" id="custom-catalog-error">{{ errors.customCatalogUrl }}</small>
+              </label>
               <label class="field advanced-password" :class="{ 'has-error': errors.aiostreamsPassword }">
                 <span>{{ t.aiostreamsPwdLabel }}</span>
                 <span class="input-action input-action--text">
@@ -496,7 +598,7 @@ async function submitSetup() {
               <label class="field"><span>{{ t.tmdbLabel }} <i>{{ t.optional }}</i></span><input id="tmdbApiKey" v-model="form.tmdbApiKey" type="password" autocomplete="off" /></label>
               <label class="field"><span>{{ t.tvdbLabel }} <i>{{ t.optional }}</i></span><input id="tvdbApiKey" v-model="form.tvdbApiKey" type="password" autocomplete="off" /></label>
             </div>
-          </details>
+          </section>
 
           <footer class="form-footer">
             <p>{{ t.privacyNote }}</p>
@@ -526,7 +628,7 @@ async function submitSetup() {
           <div class="success-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg></div>
           <span class="eyebrow">{{ t.complete }}</span>
           <h2>{{ t.readyTitle }}</h2>
-          <p>{{ result.email }} was {{ result.nuvioAccountCreated ? 'created' : 'connected' }}. AIOStreams and Cinemeta were installed on {{ result.installedProfiles }} profile{{ result.installedProfiles === 1 ? '' : 's' }}.</p>
+          <p>{{ result.email }} was {{ result.nuvioAccountCreated ? 'created' : 'connected' }}. {{ result.addons.join(' and ') }} {{ result.addons.length === 1 ? 'was' : 'were' }} installed on {{ result.installedProfiles }} profile{{ result.installedProfiles === 1 ? '' : 's' }}.</p>
 
           <div class="result-grid">
             <section>
@@ -565,7 +667,7 @@ async function submitSetup() {
 .quickstart-toggle__identity span { display: grid; }
 .quickstart-toggle__identity strong { font-size: 14px; }
 .quickstart-toggle__identity small { color: var(--vp-c-text-3); }
-.quickstart-toggle > svg, .advanced summary svg { width: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; transition: transform .2s ease; }
+.quickstart-toggle > svg { width: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; transition: transform .2s ease; }
 .rotated { transform: rotate(180deg); }
 .quickstart-body { padding: 22px; }
 .quickstart-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; padding-bottom: 20px; border-bottom: 1px solid var(--vp-c-divider); }
@@ -585,14 +687,20 @@ async function submitSetup() {
 .inline-alert p { margin: 1px 0 0; color: var(--vp-c-danger-1); font-size: 11px; }
 .inline-alert button { border: 0; background: transparent; color: var(--vp-c-danger-1); font-weight: 700; cursor: pointer; }
 .setup-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-top: 18px; }
+.mode-picker { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 5px; border: 1px solid var(--vp-c-divider); border-radius: 11px; background: var(--tool-surface-alt, var(--vp-c-bg-alt)); }
+.mode-picker button { display: grid; gap: 2px; padding: 9px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--vp-c-text-2); text-align: left; cursor: pointer; }
+.mode-picker button:hover { color: var(--vp-c-text-1); }
+.mode-picker button.active { border-color: var(--vp-c-divider); background: var(--vp-c-bg); color: var(--vp-c-text-1); box-shadow: 0 1px 3px rgb(0 0 0 / 5%); }
+.mode-picker span { font-size: 11px; font-weight: 700; }
+.mode-picker small { color: var(--vp-c-text-3); font-size: 9px; }
 .setup-panel { display: flex; flex-direction: column; gap: 14px; padding: 17px; border: 1px solid var(--vp-c-divider); border-radius: 12px; background: var(--tool-surface-alt, var(--vp-c-bg-alt)); }
 .panel-heading { margin-bottom: 1px; }
 .panel-heading h3 { margin: 0 !important; font-size: 14px !important; }
 .panel-heading p { margin: 2px 0 0; color: var(--vp-c-text-3); font-size: 11px; }
 .field { display: grid; gap: 6px; margin: 0; }
 .field > span:first-child, .field-label-row { color: var(--vp-c-text-2); font-size: 11px; font-weight: 650; }
-.field input { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--vp-c-divider); border-radius: 8px; outline: none; background: var(--vp-c-bg); color: var(--vp-c-text-1); font: 13px var(--vp-font-family-base); transition: border-color .15s, box-shadow .15s; }
-.field input:focus { border-color: var(--vp-c-brand-1); box-shadow: 0 0 0 3px var(--vp-c-brand-soft); }
+.field input, .field select { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--vp-c-divider); border-radius: 8px; outline: none; background: var(--vp-c-bg); color: var(--vp-c-text-1); font: 13px var(--vp-font-family-base); transition: border-color .15s, box-shadow .15s; }
+.field input:focus, .field select:focus { border-color: var(--vp-c-brand-1); box-shadow: 0 0 0 3px var(--vp-c-brand-soft); }
 .field input::placeholder { color: var(--vp-c-text-3); }
 .field.has-error input { border-color: var(--vp-c-danger-1); }
 .field small { color: var(--vp-c-danger-1); font-size: 10px; }
@@ -611,13 +719,13 @@ async function submitSetup() {
 .torbox-referral strong { font-size: 11px; }
 .torbox-referral small { color: var(--vp-c-text-3); font-size: 9px; }
 .torbox-referral > span:last-child { color: var(--vp-c-brand-1); font-size: 10px; font-weight: 700; white-space: nowrap; }
-.advanced { grid-column: 1 / -1; border: 1px solid var(--vp-c-divider); border-radius: 10px; }
-.advanced summary { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; cursor: pointer; list-style: none; }
-.advanced summary::-webkit-details-marker { display: none; }
-.advanced summary > span { display: grid; }
-.advanced summary strong { font-size: 11px; }
-.advanced summary small { color: var(--vp-c-text-3); font-size: 10px; }
-.advanced-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 14px 14px; }
+.advanced { grid-column: 1 / -1; padding: 14px; border: 1px solid var(--vp-c-divider); border-radius: 10px; }
+.advanced-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+.advanced-heading h3 { margin: 0 !important; font-size: 12px !important; }
+.advanced-heading p { margin: 2px 0 0; color: var(--vp-c-text-3); font-size: 10px; }
+.advanced-heading > span { padding: 3px 7px; border-radius: 999px; background: var(--vp-c-bg-soft); color: var(--vp-c-text-3); font-size: 9px; }
+.advanced-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.advanced-catalog { grid-column: 1 / -1; }
 .advanced-password { grid-column: 1 / -1; }
 .advanced-fields > p { grid-column: 1 / -1; margin: 0; color: var(--vp-c-text-2); font-size: 11px; }
 .form-footer { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 25px; padding-top: 2px; }
