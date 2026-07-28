@@ -130,6 +130,7 @@ const syncCopy = computed(() => isDutch.value ? {
   present: 'Al aanwezig',
   remapped: 'Herkoppeld',
   skipped: 'Overgeslagen',
+  warnings: 'Waarschuwingen',
   previewTitle: 'Synchronisatievoorbeeld',
   scope: 'Bereik',
   titleCol: 'Titel',
@@ -251,6 +252,7 @@ const syncCopy = computed(() => isDutch.value ? {
   present: 'Already there',
   remapped: 'Remapped',
   skipped: 'Skipped',
+  warnings: 'Warnings',
   previewTitle: 'Sync preview',
   scope: 'Scope',
   titleCol: 'Title',
@@ -512,6 +514,12 @@ const transferCount = computed(() => preview.value
     + preview.value.transfer.library.length
   : 0
 )
+const skippedIssueCount = computed(() => providerIssues.value.filter(issue => (
+  issue.status === 'unresolved' || issue.status === 'ambiguous'
+)).length)
+const warningIssueCount = computed(() => providerIssues.value.filter(issue => (
+  issue.status === 'warning'
+)).length)
 const canPreview = computed(() => (
   endpointValidation.value.valid
   && enabledMigrationScopeCount.value > 0
@@ -1806,7 +1814,8 @@ onBeforeUnmount(() => {
             <div><strong>{{ preview.stats.update }}</strong><span>{{ copy.update }}</span></div>
             <div><strong>{{ preview.stats.alreadyPresent }}</strong><span>{{ copy.present }}</span></div>
             <div><strong>{{ preview.stats.remapped }}</strong><span>{{ copy.remapped }}</span></div>
-            <div><strong>{{ providerIssues.length }}</strong><span>{{ copy.skipped }}</span></div>
+            <div><strong>{{ skippedIssueCount }}</strong><span>{{ copy.skipped }}</span></div>
+            <div><strong>{{ warningIssueCount }}</strong><span>{{ copy.warnings }}</span></div>
           </div>
 
           <div class="preview-table-wrap">
@@ -2378,7 +2387,7 @@ button:disabled { opacity: .48; cursor: not-allowed; }
 
 .preview-panel { margin-top: 20px; padding: 18px; }
 .preview-heading { justify-content: space-between; gap: 14px; margin-bottom: 14px; }
-.stats-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.stats-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
 .addon-stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stats-grid > div { display: flex; flex-direction: column; padding: 11px; border: 1px solid var(--vp-c-divider); border-radius: 9px; background: var(--vp-c-bg); }
 .stats-grid strong { color: var(--vp-c-text-1); font-size: 20px; line-height: 1; }

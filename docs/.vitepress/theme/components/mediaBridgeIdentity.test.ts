@@ -64,8 +64,43 @@ test('rejects a shared-alias merge when another namespace conflicts', () => {
   ])
   assert.equal(result.conflicts.length, 1)
   assert.deepEqual(result.conflicts[0].namespaces, ['imdb'])
+  assert.deepEqual(result.conflicts[0].sharedAliases, ['movie:tmdb:301'])
+  assert.match(result.conflicts[0].reason, /movie:tmdb:301/)
   assert.equal(result.media[0].ids.imdb, 'tt301')
   assert.equal(result.media[1].ids.imdb, 'tt302')
+})
+
+test('does not merge remakes through provider slugs', () => {
+  const result = coalesceMediaRefs([
+    movie({
+      imdb: 'tt401',
+      tmdb: 401,
+      external: { simklslug: 'shared-title', letterslug: 'shared-title-2010' }
+    }, 'Shared Title', 2010),
+    movie({
+      imdb: 'tt402',
+      tmdb: 402,
+      external: { simklslug: 'shared-title', letterslug: 'shared-title-2024' }
+    }, 'Shared Title', 2024)
+  ])
+
+  assert.equal(result.conflicts.length, 0)
+  assert.notEqual(result.keys[0], result.keys[1])
+  assert.equal(result.media[0].ids.imdb, 'tt401')
+  assert.equal(result.media[1].ids.imdb, 'tt402')
+})
+
+test('shares resolved IDs without replacing each record title', () => {
+  const result = coalesceMediaRefs([
+    movie({ imdb: 'tt501' }, 'Jumanji', 2024),
+    movie({ imdb: 'tt501', tmdb: 501 }, 'Jumanji: Level One', 2024)
+  ])
+
+  assert.equal(result.conflicts.length, 0)
+  assert.equal(result.media[0].title, 'Jumanji')
+  assert.equal(result.media[1].title, 'Jumanji: Level One')
+  assert.equal(result.media[0].ids.tmdb, 501)
+  assert.equal(result.media[1].ids.tmdb, 501)
 })
 
 test('scopes Plex and Jellyfin local IDs to the connected server', () => {

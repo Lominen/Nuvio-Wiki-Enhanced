@@ -12,6 +12,7 @@ import {
   SERVICE_DEFINITIONS,
   createEmptyBundle,
   dedupeBundle,
+  mediaTitle,
   validateEndpointPair,
   type BridgeScope,
   type CanonicalBundle,
@@ -142,17 +143,36 @@ function identityConflictIssues(
   conflicts: readonly IdentityConflict[]
 ): BridgeIssue[] {
   return conflicts.map(conflict => {
-    const scoped = recordAt(bundle, conflict.left)
-    const media = scoped?.record.media
+    const left = recordAt(bundle, conflict.left)
+    const right = recordAt(bundle, conflict.right)
+    const media = left?.record.media
+    const describe = (value: ReturnType<typeof recordAt>) => {
+      if (!value?.record.media) return 'Unknown record'
+      const candidate = value.record.media
+      const year = candidate.year ? ` (${candidate.year})` : ''
+      const episode = candidate.kind === 'series'
+        && Number.isInteger(candidate.season)
+        && Number.isInteger(candidate.episode)
+        ? ` S${candidate.season}E${candidate.episode}`
+        : ''
+      const aliases = identityAliasKeys(candidate)
+      return `${mediaTitle(candidate)}${year}${episode} [${aliases.join(', ') || 'no stable aliases'}]`
+    }
+    const candidates = [describe(left), describe(right)]
     return {
-      scope: scoped?.scope || 'library',
+      scope: left?.scope || 'library',
       status: 'warning',
       media,
       code: 'identity_conflict',
-      reason: conflict.reason,
+      reason: `${conflict.reason} Both records were kept separate.`,
       evidence: {
-        aliases: media ? identityAliasKeys(media) : [],
-        candidates: conflict.namespaces
+        aliases: [
+          ...(left?.record.media ? identityAliasKeys(left.record.media) : []),
+          ...(right?.record.media ? identityAliasKeys(right.record.media) : [])
+        ],
+        sharedAliases: conflict.sharedAliases,
+        conflictingNamespaces: conflict.namespaces,
+        candidates
       }
     }
   })

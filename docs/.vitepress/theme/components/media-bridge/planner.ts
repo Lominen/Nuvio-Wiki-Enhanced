@@ -441,6 +441,26 @@ function listProvenanceLabel(record: LibraryRecord): string {
   }).join(' | ')
 }
 
+function sourceStateDiagnostic(scope: BridgeScope, record: ScopedRecord): PreviewDiagnostic {
+  if (scope === 'history') {
+    return {
+      key: 'sourceState',
+      value: `watched ${timestampLabel((record as HistoryRecord).watchedAt)}`
+    }
+  }
+  if (scope === 'progress') {
+    return {
+      key: 'sourceState',
+      value: progressStateLabel(record as ProgressRecord)
+    }
+  }
+  const library = record as LibraryRecord
+  return {
+    key: 'sourceState',
+    value: `added ${timestampLabel(library.addedAt)} · memberships ${listProvenanceLabel(library)}`
+  }
+}
+
 function libraryComparison(
   source: LibraryRecord,
   destination: LibraryRecord
@@ -988,8 +1008,11 @@ export function planMediaBridgePreview(input: MediaBridgePlanInput): MediaBridge
         && episodeCoordinatesChanged(originalMedia, mappedMedia)
       )
       const diagnostics = [
-        ...(remapped
+        ...(outcome === 'add' || remapped
           ? mappingEvidenceDiagnostics(originalMedia, sourceKey, issue?.mapping.evidence)
+          : []),
+        ...(outcome === 'add'
+          ? [sourceStateDiagnostic(scope, sourceRecord)]
           : []),
         ...(outcome === 'update' && destinationRecord
           ? updateDiagnostics(scope, plannedRecord, destinationRecord, {

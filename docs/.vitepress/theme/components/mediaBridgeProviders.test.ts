@@ -2554,6 +2554,9 @@ test('collapses replay events for Simkl watched state and confirms an accepted n
     movieHistory('Already Watched', 'tt2015381', Date.UTC(2026, 6, 16)),
     movieHistory('Already Watched', 'tt2015381', Date.UTC(2026, 6, 17))
   )
+  bundle.history.forEach(record => {
+    record.media.ids.slug = 'provider-generated-slug'
+  })
 
   const result = await pushMediaBridge({
     connection: simklConnection(),
@@ -2564,6 +2567,7 @@ test('collapses replay events for Simkl watched state and confirms an accepted n
   assert.equal(fetchMock.mock.callCount(), 1)
   assert.equal(requestBody.movies.length, 1)
   assert.equal(requestBody.movies[0].watched_at, '2026-07-17T00:00:00.000Z')
+  assert.equal(requestBody.movies[0].ids.traktslug, undefined)
   assert.equal(result.written.history, 1)
   assert.equal(result.skipped?.history, undefined)
   assert.deepEqual(result.confirmedScopes, ['history'])
@@ -2743,6 +2747,66 @@ test('refreshes Nuvio once while reading selected scopes concurrently', async t 
     '/rest/v1/rpc/sync_pull_library'
   ]))
   assert.deepEqual(result.bundle, createEmptyBundle())
+})
+
+test('rejects invalid Nuvio watched markers and parses compact watched timestamps', async t => {
+  const logs: string[] = []
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input))
+    assert.equal(url.pathname, '/rest/v1/rpc/sync_pull_watched_items')
+    assert.equal(JSON.parse(String(init?.body || '{}')).p_profile_id, 1)
+    return Response.json([
+      {
+        content_id: 'custom:no-time',
+        content_type: 'movie',
+        title: 'Not actually watched',
+        watched_at: null
+      },
+      {
+        content_id: 'custom:series-marker',
+        content_type: 'series',
+        title: 'Series-level marker',
+        season: null,
+        episode: null,
+        watched_at: '2026-07-17T12:00:00Z'
+      },
+      {
+        content_id: 'custom:valid-movie',
+        content_type: 'movie',
+        title: 'Valid movie',
+        watched_at: 20260717120000
+      },
+      {
+        content_id: 'custom:valid-episode',
+        content_type: 'series',
+        title: 'Valid series',
+        season: 1,
+        episode: 2,
+        watched_at: '2026-07-18T13:00:00Z'
+      }
+    ])
+  })
+
+  const result = await pullMediaBridge({
+    connection: nuvioConnection('source'),
+    scopes: { history: true, progress: false, library: false },
+    log: message => logs.push(message)
+  })
+
+  assert.equal(fetchMock.mock.callCount(), 1)
+  assert.equal(result.bundle.history.length, 2)
+  assert.equal(
+    result.bundle.history.find(record => record.media.title === 'Valid movie')?.watchedAt,
+    Date.UTC(2026, 6, 17, 12)
+  )
+  assert.equal(
+    result.bundle.history.find(record => record.media.title === 'Valid series')?.media.episode,
+    2
+  )
+  assert.equal(result.issues.length, 2)
+  assert.ok(result.issues.every(issue => issue.code === 'source_record_invalid'))
+  assert.ok(result.issues.every(issue => issue.status === 'unresolved'))
+  assert.ok(logs.includes('Ignored 2 invalid Nuvio watched records.'))
 })
 
 test('bounds concurrent Nuvio write batches across history and progress', async t => {

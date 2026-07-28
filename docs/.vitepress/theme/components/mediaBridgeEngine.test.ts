@@ -303,6 +303,40 @@ test('marks an accepted record failed when selective verification cannot observe
   assert.ok(result.issues.some(issue => issue.code === 'verification_unconfirmed'))
 })
 
+test('reports identity conflicts as non-skipping warnings with both records as evidence', async () => {
+  const source = createEmptyBundle()
+  source.history.push(
+    {
+      media: { kind: 'movie', ids: { imdb: 'tt801', tmdb: 801 }, title: 'Original', year: 2010 },
+      watchedAt: 100
+    },
+    {
+      media: { kind: 'movie', ids: { imdb: 'tt802', tmdb: 801 }, title: 'Remake', year: 2024 },
+      watchedAt: 200
+    }
+  )
+  const state: FakeState = {
+    source,
+    destination: createEmptyBundle(),
+    verifyScopes: []
+  }
+  const engine = createMediaBridgeEngine({
+    adapters: adapters(state),
+    enrichBundle: async bundle => bundle
+  })
+
+  const prepared = await engine.preview(engineInput('trakt', 'simkl'))
+  const warning = prepared.issues.find(issue => issue.code === 'identity_conflict')
+
+  assert.equal(prepared.plan.stats.add, 2)
+  assert.equal(prepared.plan.stats.skipped, 0)
+  assert.equal(warning?.status, 'warning')
+  assert.deepEqual(warning?.evidence?.sharedAliases, ['movie:tmdb:801'])
+  assert.deepEqual(warning?.evidence?.conflictingNamespaces, ['imdb'])
+  assert.ok(warning?.evidence?.candidates?.some(candidate => candidate.includes('Original (2010)')))
+  assert.ok(warning?.evidence?.candidates?.some(candidate => candidate.includes('Remake (2024)')))
+})
+
 test('exposes stable mapping issue codes and keeps the portal activity UI wired to the engine', async () => {
   const source = createEmptyBundle()
   source.history.push({
@@ -331,6 +365,11 @@ test('exposes stable mapping issue codes and keeps the portal activity UI wired 
   assert.match(component, /previewRow\?\.diagnostics\.length/)
   assert.match(component, /issue\.itemLabel/)
   assert.doesNotMatch(component, /providerIssues\.slice\(/)
+  assert.match(component, /const skippedIssueCount = computed/)
+  assert.match(component, /const warningIssueCount = computed/)
+  assert.match(component, /\{\{ skippedIssueCount \}\}.*\{\{ copy\.skipped \}\}/s)
+  assert.match(component, /\{\{ warningIssueCount \}\}.*\{\{ copy\.warnings \}\}/s)
+  assert.doesNotMatch(component, /\{\{ providerIssues\.length \}\}.*\{\{ copy\.skipped \}\}/s)
   assert.match(component, /async function copyActivityLogs\(\)/)
   assert.match(component, /navigator\.clipboard\?\.writeText/)
   assert.match(component, /copyActivityFallback/)

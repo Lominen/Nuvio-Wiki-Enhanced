@@ -211,6 +211,8 @@ export interface BridgeIssue {
     aliases?: string[]
     confidence?: string
     candidates?: string[]
+    sharedAliases?: string[]
+    conflictingNamespaces?: string[]
   }
 }
 
@@ -293,6 +295,32 @@ function asEpochMs(value: unknown, fallback = 0): number {
   }
   const parsed = Date.parse(String(value || ''))
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function nuvioWatchedAt(value: unknown): number {
+  const compact = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(
+    String(value ?? '').trim()
+  )
+  if (!compact) return asEpochMs(value)
+  const [, year, month, day, hour, minute, second] = compact
+  const parts = [year, month, day, hour, minute, second].map(Number)
+  const timestamp = Date.UTC(
+    parts[0],
+    parts[1] - 1,
+    parts[2],
+    parts[3],
+    parts[4],
+    parts[5]
+  )
+  const date = new Date(timestamp)
+  return date.getUTCFullYear() === parts[0]
+    && date.getUTCMonth() === parts[1] - 1
+    && date.getUTCDate() === parts[2]
+    && date.getUTCHours() === parts[3]
+    && date.getUTCMinutes() === parts[4]
+    && date.getUTCSeconds() === parts[5]
+    ? timestamp
+    : 0
 }
 
 function positiveNumber(value: unknown, fallback = 0): number {
@@ -534,7 +562,6 @@ function simklWriteIds(media: MediaRef): Record<string, string | number> | null 
     const value = media.ids[key]
     if (value !== undefined && value !== null && String(value).trim()) ids[key] = value
   }
-  if (media.ids.slug) ids.traktslug = media.ids.slug
   for (const namespace of SIMKL_EXTERNAL_ID_NAMESPACES) {
     const value = media.ids.external?.[namespace]
     if (value !== undefined && value !== null && String(value).trim()) ids[namespace] = value
@@ -2695,6 +2722,7 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
 
   const historyRequest = scopes.history ? (async () => {
     logTo(log, 'Reading Nuvio watched items...')
+    let rejected = 0
     for (let page = 1; page <= 200; page++) {
       const rows = await nuvioRpc(connection, 'sync_pull_watched_items', {
         p_profile_id: profileId,
@@ -2703,18 +2731,54 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
       })
       const batch = Array.isArray(rows) ? rows : []
       for (const item of batch) {
+        const contentId = String(item.content_id ?? '').trim()
+        const season = item.season === null || item.season === undefined || item.season === ''
+          ? undefined
+          : Number(item.season)
+        const episode = item.episode === null || item.episode === undefined || item.episode === ''
+          ? undefined
+          : Number(item.episode)
+        const watchedAt = nuvioWatchedAt(item.watched_at)
         const media: MediaRef = {
           kind: item.content_type === 'movie' ? 'movie' : 'series',
-          ids: parseNuvioContentId(item.content_id),
+          ids: parseNuvioContentId(contentId),
           title: item.title,
-          season: item.season === null ? undefined : Number(item.season),
-          episode: item.episode === null ? undefined : Number(item.episode),
+          season,
+          episode,
           videoId: item.video_id || undefined
         }
-        bundle.history.push({ media, watchedAt: asEpochMs(item.watched_at), source: provenance })
+        const invalidReason = !contentId
+          ? 'Nuvio returned a watched record without a content ID.'
+          : watchedAt <= 0
+            ? 'Nuvio returned a watched record without a valid watched timestamp.'
+            : media.kind === 'series'
+              && (!Number.isInteger(season) || Number(season) < 0 || !Number.isInteger(episode) || Number(episode) < 1)
+              ? 'Nuvio returned a series-level watched marker without a deterministic season and episode.'
+              : ''
+        if (invalidReason) {
+          rejected++
+          issues.push({
+            scope: 'history',
+            status: 'unresolved',
+            media,
+            code: 'source_record_invalid',
+            reason: invalidReason,
+            evidence: {
+              aliases: [
+                ...(contentId ? [`nuvio:content_id:${contentId}`] : []),
+                ...(item.watched_at !== null && item.watched_at !== undefined
+                  ? [`nuvio:watched_at:${String(item.watched_at)}`]
+                  : [])
+              ]
+            }
+          })
+          continue
+        }
+        bundle.history.push({ media, watchedAt, source: provenance })
       }
       if (batch.length < 500) break
     }
+    if (rejected) logTo(log, `Ignored ${rejected} invalid Nuvio watched ${rejected === 1 ? 'record' : 'records'}.`)
   })() : Promise.resolve()
 
   const progressRequest = scopes.progress ? (async () => {

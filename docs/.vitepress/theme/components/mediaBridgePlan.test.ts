@@ -68,6 +68,21 @@ test('dedupes and scopes source records into a deeply frozen transfer plan', () 
   assert.equal(plan.transfer.history[0].watchedAt, 200)
   assert.equal(plan.transfer.progress.length, 1)
   assert.equal(plan.transfer.library.length, 0)
+  const historyRow = plan.rows.find(row => row.title === 'History')
+  assert.deepEqual(historyRow?.diagnostics.map(diagnostic => diagnostic.key), [
+    'mediaIds',
+    'canonicalKey',
+    'sourceState'
+  ])
+  assert.match(
+    historyRow?.diagnostics.find(diagnostic => diagnostic.key === 'sourceState')?.value || '',
+    /watched .*200 ms/
+  )
+  const progressRow = plan.rows.find(row => row.title === 'Progress')
+  assert.match(
+    progressRow?.diagnostics.find(diagnostic => diagnostic.key === 'sourceState')?.value || '',
+    /50\.00%.*position 50 ms.*duration 100 ms/
+  )
   assert.ok(Object.isFrozen(plan))
   assert.ok(Object.isFrozen(plan.transfer))
   assert.ok(Object.isFrozen(plan.transfer.history))

@@ -443,6 +443,30 @@ function normalizedStremioContentId(value: unknown): string {
   return parseStremioVideoId(normalized)?.contentId || normalized
 }
 
+const STABLE_EXTERNAL_ID_NAMESPACES = new Set([
+  'mal',
+  'anidb',
+  'anilist',
+  'kitsu',
+  'livechart',
+  'anisearch',
+  'animeplanet',
+  'crunchyroll',
+  'netflix',
+  'letterboxd',
+  'hulu'
+])
+
+/**
+ * Returns external namespaces that are stable enough to identify the same
+ * title across providers. Provider-generated slugs and unknown catalog-local
+ * keys are deliberately excluded because remakes often reuse them.
+ */
+export function stableExternalIdNamespace(value: unknown): string {
+  const namespace = String(value ?? '').trim().toLocaleLowerCase('en-US')
+  return STABLE_EXTERNAL_ID_NAMESPACES.has(namespace) ? namespace : ''
+}
+
 function collectCanonicalIds(ids: MediaIds): Array<[namespace: string, value: string]> {
   const aliases: Array<[namespace: string, value: string]> = []
   const seen = new Set<string>()
@@ -469,12 +493,9 @@ function collectCanonicalIds(ids: MediaIds): Array<[namespace: string, value: st
   }
   if (stremioId) add('stremio', stremioId.toLocaleLowerCase('en-US'))
 
-  const slug = String(ids.slug ?? '').trim().toLocaleLowerCase('en-US')
-  if (slug) add('slug', slug)
-
   const externalIds = Object.entries(ids.external || {})
     .map(([namespace, value]) => ({
-      namespace: namespace.trim().toLocaleLowerCase('en-US'),
+      namespace: stableExternalIdNamespace(namespace),
       value: String(value ?? '').trim()
     }))
     .filter(item => item.namespace && item.value)

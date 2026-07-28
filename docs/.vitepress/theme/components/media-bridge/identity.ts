@@ -1,3 +1,4 @@
+import { stableExternalIdNamespace } from './core.ts'
 import type {
   CanonicalBundle,
   ConnectedEndpoint,
@@ -33,6 +34,7 @@ export interface IdentityConflict {
   left: number
   right: number
   namespaces: string[]
+  sharedAliases: string[]
   reason: string
 }
 
@@ -107,12 +109,11 @@ function baseAliases(media: MediaRef, context: IdentityContext): IdentityAlias[]
   add('trakt', numericId(media.ids.trakt))
   add('simkl', numericId(media.ids.simkl))
   add('stremio', stremio)
-  add('slug', folded(media.ids.slug))
   add('plex', folded(media.ids.plex), true, endpointScope('plex', context))
   add('jellyfin', folded(media.ids.jellyfin), true, endpointScope('jellyfin', context))
 
   for (const [rawNamespace, rawValue] of Object.entries(media.ids.external || {})) {
-    const namespace = folded(rawNamespace)
+    const namespace = stableExternalIdNamespace(rawNamespace)
     const value = folded(rawValue)
     if (!namespace || !value) continue
     add(`external:${encodeURIComponent(namespace)}`, value)
@@ -251,6 +252,30 @@ function mergeMedia(target: MediaRef, source: MediaRef): void {
   target.videoId ??= source.videoId
 }
 
+function withMergedIdentity(original: MediaRef, merged: MediaRef): MediaRef {
+  const result = cloneMedia(original)
+  result.ids = { ...merged.ids }
+  if (merged.ids.external) result.ids.external = { ...merged.ids.external }
+  if (!result.title && merged.title) result.title = merged.title
+  if (!result.episodeTitle && merged.episodeTitle) result.episodeTitle = merged.episodeTitle
+  if (result.year === undefined && merged.year !== undefined) result.year = merged.year
+  if (result.season === undefined && merged.season !== undefined) result.season = merged.season
+  if (result.episode === undefined && merged.episode !== undefined) result.episode = merged.episode
+  if (result.absoluteEpisode === undefined && merged.absoluteEpisode !== undefined) {
+    result.absoluteEpisode = merged.absoluteEpisode
+  }
+  if (result.videoId === undefined && merged.videoId !== undefined) result.videoId = merged.videoId
+  if (result.destinationContentId === undefined && merged.destinationContentId !== undefined) {
+    result.destinationContentId = merged.destinationContentId
+  }
+  return result
+}
+
+function conflictReason(sharedAliases: readonly string[], namespaces: readonly string[]): string {
+  const shared = sharedAliases.length === 1 ? 'alias' : 'aliases'
+  return `Shared ${shared} ${sharedAliases.join(', ')} rejected because ${namespaces.join(', ')} IDs conflict.`
+}
+
 class IdentityUnion {
   readonly parent: number[]
   readonly namespaces: Array<Map<string, Set<string>>>
@@ -319,6 +344,7 @@ export function coalesceMediaRefs(
   const aliases = input.map((media, index) => identityAliases(media, contexts[index] || {}))
   const union = new IdentityUnion(aliases)
   const conflicts: IdentityConflict[] = []
+  const conflictByPair = new Map<string, IdentityConflict>()
   const byAlias = new Map<string, number>()
 
   aliases.forEach((items, index) => {
@@ -330,12 +356,24 @@ export function coalesceMediaRefs(
       }
       const namespaces = union.conflicts(existing, index)
       if (namespaces.length) {
-        conflicts.push({
-          left: existing,
-          right: index,
-          namespaces,
-          reason: `Shared identity was rejected because ${namespaces.join(', ')} IDs conflict.`
-        })
+        const left = Math.min(existing, index)
+        const right = Math.max(existing, index)
+        const conflictKey = `${left}:${right}:${namespaces.join('|')}`
+        const current = conflictByPair.get(conflictKey)
+        if (current) {
+          if (!current.sharedAliases.includes(alias.key)) current.sharedAliases.push(alias.key)
+          current.reason = conflictReason(current.sharedAliases, current.namespaces)
+        } else {
+          const conflict: IdentityConflict = {
+            left,
+            right,
+            namespaces,
+            sharedAliases: [alias.key],
+            reason: conflictReason([alias.key], namespaces)
+          }
+          conflictByPair.set(conflictKey, conflict)
+          conflicts.push(conflict)
+        }
         continue
       }
       union.union(existing, index)
@@ -365,7 +403,12 @@ export function coalesceMediaRefs(
     else merged.set(root, cloneMedia(media))
   })
 
-  const media = input.map((_, index) => cloneMedia(merged.get(union.find(index))!))
+  // Share the resolved identity set without replacing a record's own non-empty
+  // title or episode metadata. This prevents an unrelated longer provider title
+  // from becoming the visible source item after coalescing.
+  const media = input.map((item, index) => (
+    withMergedIdentity(item, merged.get(union.find(index))!)
+  ))
   return {
     media,
     keys: media.map((item, index) => canonicalIdentityKey(item, contexts[index] || {})),
