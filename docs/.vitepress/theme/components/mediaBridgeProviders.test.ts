@@ -1531,6 +1531,158 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
   assert.deepEqual(result.issues, [])
 })
 
+test('maps combined Trakt seasons across related Kitsu installments and writes the owning Kitsu ID', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'split-kitsu-user'
+  connection.profileId = 8
+  let watchedItems: any[] = []
+
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/rest/v1/addons') {
+      return Response.json([{
+        url: 'https://split-kitsu.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 8
+      }])
+    }
+    if (url.hostname === 'split-kitsu.test' && url.pathname === '/manifest.json') {
+      return Response.json({
+        id: 'community.split.kitsu',
+        resources: ['meta'],
+        types: ['anime'],
+        idPrefixes: ['kitsu']
+      })
+    }
+    if (url.hostname === 'kitsu.io' && url.pathname.endsWith('/media-relationships')) {
+      const kitsuId = url.pathname.split('/').at(-2)
+      return Response.json({
+        data: kitsuId === '45469'
+          ? [{
+              attributes: { role: 'sequel' },
+              relationships: {
+                destination: { data: { type: 'anime', id: '45515' } }
+              }
+            }]
+          : []
+      })
+    }
+    if (url.hostname === 'split-kitsu.test' && url.pathname.startsWith('/meta/')) {
+      const metadataId = decodeURIComponent(url.pathname.split('/').at(-1)!.replace(/\.json$/, ''))
+      const installment = metadataId === 'kitsu:45469'
+        ? { id: '45469', prefix: 'Season one' }
+        : metadataId === 'kitsu:45515'
+          ? { id: '45515', prefix: 'Season two' }
+          : null
+      if (!installment) return new Response(null, { status: 404 })
+      return Response.json({
+        meta: {
+          id: `kitsu:${installment.id}`,
+          videos: Array.from({ length: 9 }, (_, index) => ({
+            id: `kitsu:${installment.id}:1:${index + 1}`,
+            season: 1,
+            episode: index + 1,
+            title: installment.id === '45515' && index === 0
+              ? 'Heavy Is the Crown'
+              : `${installment.prefix} episode ${index + 1}`
+          }))
+        }
+      })
+    }
+    if (url.hostname === 'api.trakt.tv' && url.pathname === '/shows/154164/seasons') {
+      return Response.json([
+        {
+          number: 1,
+          episodes: Array.from({ length: 9 }, (_, index) => ({
+            number: index + 1,
+            number_abs: index + 1,
+            title: `Trakt season one episode ${index + 1}`,
+            ids: { trakt: 12_178_700 + index }
+          }))
+        },
+        {
+          number: 2,
+          episodes: Array.from({ length: 9 }, (_, index) => ({
+            number: index + 1,
+            number_abs: index + 10,
+            title: index === 0 ? 'Heavy Is the Crown' : `Trakt season two episode ${index + 1}`,
+            ids: { trakt: 12_178_826 + index }
+          }))
+        }
+      ])
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_delete_watched_items') {
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_push_watched_items') {
+      watchedItems = body.p_items
+      return Response.json(null)
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const source = createEmptyBundle()
+  source.history.push({
+    media: {
+      kind: 'series',
+      ids: {
+        imdb: 'tt11126994',
+        tmdb: 94605,
+        tvdb: 371028,
+        trakt: 154164,
+        external: { kitsu: 45469 }
+      },
+      title: 'Arcane',
+      year: 2021,
+      season: 2,
+      episode: 1,
+      absoluteEpisode: 10,
+      episodeTitle: 'Heavy Is the Crown',
+      videoId: 'trakt:12178826'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+
+  const scopes = { history: true, progress: false, library: false }
+  const mappings = await inspectDestinationMappings(
+    connection,
+    source,
+    scopes,
+    undefined,
+    traktConnection('source')
+  )
+  assert.equal(mappings[0].mapping.status, 'mapped')
+  assert.equal(mappings[0].mapping.target?.videoId, 'kitsu:45515:1:1')
+  assert.equal(mappings[0].mapping.target?.contentId, 'kitsu:45515')
+
+  const plan = planMediaBridgePreview({
+    source,
+    destination: createEmptyBundle(),
+    sourceEndpoint: traktConnection('source'),
+    destinationEndpoint: connection,
+    destinationService: 'nuvio',
+    scopes,
+    mappingIssues: mappings
+  })
+  assert.equal(plan.transfer.history[0].media.destinationContentId, 'kitsu:45515')
+  assert.equal(plan.transfer.history[0].media.season, 1)
+  assert.equal(plan.transfer.history[0].media.episode, 1)
+
+  const result = await pushMediaBridge({
+    connection,
+    bundle: plan.transfer,
+    scopes
+  })
+  assert.equal(watchedItems[0].content_id, 'kitsu:45515')
+  assert.equal(watchedItems[0].season, 1)
+  assert.equal(watchedItems[0].episode, 1)
+  assert.deepEqual(result.written, { history: 1, progress: 0, library: 0 })
+  assert.deepEqual(result.issues, [])
+})
+
 test('decodes native Stremio Kitsu history with its installed addon episode order', async t => {
   const connection = stremioConnection()
   connection.slot = 'source'

@@ -172,6 +172,8 @@ export interface MediaRef {
   absoluteEpisode?: number
   episodeTitle?: string
   videoId?: string
+  /** Provider-native content identity selected while remapping an episode. */
+  destinationContentId?: string
 }
 
 export interface RecordProvenance {
@@ -546,8 +548,19 @@ function titleYearMediaKey(media: MediaRef): string | null {
  * canonical priority order. Numeric IDs never match across namespaces.
  */
 export function mediaAliasKeys(media: MediaRef): string[] {
-  const aliases = collectCanonicalIds(media.ids)
-    .map(([namespace, value]) => `${media.kind}:${namespace}:${value}`)
+  const canonicalIds = collectCanonicalIds(media.ids)
+  const destinationContentId = normalizedStremioContentId(media.destinationContentId)
+    .toLocaleLowerCase('en-US')
+  if (destinationContentId) {
+    const namespace = normalizeImdbId(destinationContentId) ? 'imdb' : 'stremio'
+    const value = namespace === 'imdb' ? normalizeImdbId(destinationContentId) : destinationContentId
+    if (!canonicalIds.some(alias => alias[0] === namespace && alias[1] === value)) {
+      canonicalIds.push([namespace, value])
+    }
+  }
+  const aliases = canonicalIds.map(
+    ([namespace, value]) => `${media.kind}:${namespace}:${value}`
+  )
   if (aliases.length) return aliases
   const fallback = titleYearMediaKey(media)
   return fallback ? [fallback] : []
@@ -754,6 +767,10 @@ export interface EpisodeRef {
   absoluteEpisode?: number
   title?: string
   videoId?: string
+  /** Provider-native identity that owns this episode. */
+  contentId?: string
+  /** Zero-based position in an explicitly ordered multi-catalog sequence. */
+  sequenceIndex?: number
 }
 
 export type MappingConfidence = 'exact' | 'high' | 'medium' | 'low' | 'none'
@@ -821,6 +838,7 @@ function episodeSort(left: EpisodeRef, right: EpisodeRef): number {
     || left.episode - right.episode
     || leftAbsolute - rightAbsolute
     || normalizeTitle(left.title).localeCompare(normalizeTitle(right.title))
+    || String(left.contentId || '').localeCompare(String(right.contentId || ''))
     || String(left.videoId || '').localeCompare(String(right.videoId || ''))
 }
 
@@ -830,13 +848,22 @@ function sortedEpisodes(episodes: readonly EpisodeRef[]): EpisodeRef[] {
 
 function normalizedRegularEpisodeSequence(episodes: readonly EpisodeRef[]): EpisodeRef[] {
   const seen = new Set<string>()
-  return sortedEpisodes(episodes)
+  const ordered = episodes.every(episode => (
+    Number.isInteger(episode.sequenceIndex) && Number(episode.sequenceIndex) >= 0
+  ))
+    ? [...episodes].sort((left, right) => (
+        Number(left.sequenceIndex) - Number(right.sequenceIndex) || episodeSort(left, right)
+      ))
+    : sortedEpisodes(episodes)
+  return ordered
     .filter(episode => episode.season > 0 && episode.episode > 0)
     .filter(episode => {
       const videoId = String(episode.videoId || '').trim()
       const key = videoId
         ? `video:${videoId}`
-        : `coordinate:${episode.season}:${episode.episode}`
+        : episode.contentId
+          ? `content:${episode.contentId}:coordinate:${episode.season}:${episode.episode}`
+          : `coordinate:${episode.season}:${episode.episode}`
       if (seen.has(key)) return false
       seen.add(key)
       return true
@@ -1009,9 +1036,15 @@ function sameIndexSequenceCandidate(
   // been removed. Small or materially divergent catalogs remain unresolved.
   const orderedSource = normalizedRegularEpisodeSequence(sourceEpisodes)
   const orderedTarget = normalizedRegularEpisodeSequence(targetEpisodes)
+  const explicitlyOrderedTarget = orderedTarget.length > 0 && orderedTarget.every(episode => (
+    Number.isInteger(episode.sequenceIndex) && Number(episode.sequenceIndex) >= 0
+  ))
   if (
-    orderedSource.length < SAME_INDEX_MIN_CATALOG_SIZE
-    || orderedTarget.length < SAME_INDEX_MIN_CATALOG_SIZE
+    !explicitlyOrderedTarget
+    && (
+      orderedSource.length < SAME_INDEX_MIN_CATALOG_SIZE
+      || orderedTarget.length < SAME_INDEX_MIN_CATALOG_SIZE
+    )
   ) return { candidate: null }
 
   const catalogDeltaRatio = Math.abs(orderedSource.length - orderedTarget.length)
@@ -1142,13 +1175,21 @@ export function remapEpisode(
   }
   const source = resolvedSource
   const sourceTitle = meaningfulEpisodeTitle(source.title)
+  const explicitlyOrderedTarget = targetEpisodes.some(episode => (
+    Number.isInteger(episode.sequenceIndex) && Number(episode.sequenceIndex) >= 0
+  ))
   const videoIdMatches = source.videoId
     ? targetEpisodes.filter(item => item.videoId === source.videoId)
     : []
-  const coordinateMatches = targetEpisodes.filter(item => (
-    item.season === source.season && item.episode === source.episode
-  ))
-  const absoluteMatches = validEpisode(source.absoluteEpisode)
+  // Related Kitsu installments restart local season/episode and absolute
+  // numbering. Their explicit global sequence is authoritative; comparing the
+  // local coordinates across installments creates duplicate false matches.
+  const coordinateMatches = explicitlyOrderedTarget
+    ? []
+    : targetEpisodes.filter(item => (
+        item.season === source.season && item.episode === source.episode
+      ))
+  const absoluteMatches = !explicitlyOrderedTarget && validEpisode(source.absoluteEpisode)
     ? targetEpisodes.filter(item => item.absoluteEpisode === source.absoluteEpisode)
     : []
   const titleMatches = sourceTitle
@@ -1208,7 +1249,7 @@ export function remapEpisode(
       }
     }
 
-    if (titleMatches.length > 1) {
+    if (titleMatches.length > 1 && !explicitlyOrderedTarget) {
       return {
         ...ambiguous('high', titleMatches, 'The normalized episode title matches multiple destination episodes.'),
         evidence
@@ -1233,7 +1274,7 @@ export function remapEpisode(
       evidence: fuzzyEvidence
     }
   }
-  if (fuzzyTitleMatches.length > 1) {
+  if (fuzzyTitleMatches.length > 1 && !explicitlyOrderedTarget) {
     return {
       ...ambiguous(
         'high',

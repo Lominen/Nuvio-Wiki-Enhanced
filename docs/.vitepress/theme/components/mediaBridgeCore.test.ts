@@ -222,6 +222,21 @@ test('exposes namespace-safe media and episode aliases for secondary-ID matching
   const malAliases = new Set(mediaAliasKeys(movie({ external: { mal: 42 } })))
   assert.ok(mediaAliasKeys(movie({ external: { kitsu: 42 } })).every(alias => !malAliases.has(alias)))
   assert.deepEqual(mediaAliasKeys(movie({ jellyfin: 'item:abc' })), ['movie:jellyfin:item:abc'])
+
+  const remappedKitsu: MediaRef = {
+    kind: 'series',
+    ids: { external: { kitsu: 45469 } },
+    destinationContentId: 'kitsu:45515',
+    season: 1,
+    episode: 1
+  }
+  assert.deepEqual(mediaAliasKeys(remappedKitsu), [
+    'series:external:kitsu:45469',
+    'series:stremio:kitsu:45515'
+  ])
+  assert.ok(episodeAliasKeys(remappedKitsu).includes(
+    'series:stremio:kitsu:45515:season:1:episode:1'
+  ))
 })
 
 test('preserves external anime IDs without sharing nested references', () => {
@@ -522,6 +537,52 @@ test('uses Nuvio-compatible same-index mapping only for comparable long catalogs
   assert.equal(bleach.target, null)
   assert.equal(bleach.evidence?.sequenceStrategy, undefined)
   assert.equal(bleach.evidence?.sequenceCandidate, null)
+})
+
+test('maps short Kitsu installment catalogs as one explicitly ordered sequence', () => {
+  const sourceEpisodes: EpisodeRef[] = Array.from({ length: 8 }, (_, index) => ({
+    season: index < 4 ? 1 : 2,
+    episode: (index % 4) + 1,
+    absoluteEpisode: index + 1,
+    title: `Trakt installment ${index + 1}`,
+    videoId: `trakt:split:${index + 1}`
+  }))
+  const targetEpisodes: EpisodeRef[] = Array.from({ length: 8 }, (_, index) => ({
+    season: 1,
+    episode: (index % 4) + 1,
+    title: index === 0 ? sourceEpisodes[0].title : `Kitsu installment ${index + 1}`,
+    videoId: index < 4
+      ? `kitsu:47110:1:${index + 1}`
+      : `kitsu:48560:1:${index - 3}`,
+    contentId: index < 4 ? 'kitsu:47110' : 'kitsu:48560',
+    sequenceIndex: index
+  }))
+
+  const uniqueTitle = remapEpisode(sourceEpisodes[0], sourceEpisodes, targetEpisodes)
+  assert.equal(uniqueTitle.status, 'mapped')
+  assert.equal(uniqueTitle.target?.videoId, 'kitsu:47110:1:1')
+  assert.equal(uniqueTitle.target?.contentId, 'kitsu:47110')
+  assert.deepEqual(uniqueTitle.evidence?.coordinateMatches, [])
+
+  const unanchoredTarget = targetEpisodes.map((episode, index) => ({
+    ...episode,
+    title: [
+      'A Small Favor',
+      'The Missing Key',
+      'Storm Warning',
+      'Quiet Morning',
+      'A New Arrival',
+      'The Long Road',
+      'Home Again',
+      'A Fresh Start'
+    ][index]
+  }))
+  const secondInstallment = remapEpisode(sourceEpisodes[4], sourceEpisodes, unanchoredTarget)
+  assert.equal(secondInstallment.status, 'mapped')
+  assert.equal(secondInstallment.confidence, 'low')
+  assert.equal(secondInstallment.target?.videoId, 'kitsu:48560:1:1')
+  assert.equal(secondInstallment.target?.contentId, 'kitsu:48560')
+  assert.equal(secondInstallment.evidence?.sequenceStrategy, 'same-index')
 })
 
 test('never guesses an episode by ordered position after deterministic matches fail', () => {

@@ -231,7 +231,8 @@ function cloneMediaWithMapping(media: MediaRef, mapping: MappingOutcome): MediaR
     episode: mapping.target.episode,
     absoluteEpisode: mapping.target.absoluteEpisode ?? media.absoluteEpisode,
     episodeTitle: mapping.target.title || media.episodeTitle,
-    videoId: mapping.target.videoId || media.videoId
+    videoId: mapping.target.videoId || media.videoId,
+    destinationContentId: mapping.target.contentId || media.destinationContentId
   }
 }
 
@@ -293,6 +294,7 @@ function episodeRefLabel(episode: EpisodeRef | null | undefined): string {
   const parts = [coordinates]
   if (episode.title) parts.push(`“${episode.title}”`)
   if (Number.isInteger(episode.absoluteEpisode)) parts.push(`absolute ${episode.absoluteEpisode}`)
+  if (episode.contentId) parts.push(`content ID ${episode.contentId}`)
   if (episode.videoId) parts.push(`video ID ${episode.videoId}`)
   return parts.join(' · ')
 }
