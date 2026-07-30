@@ -50,7 +50,7 @@ A corrupted or oversized cache can cause playback to stall.
 - On mobile: **Device Settings → General → iPhone Storage → Nuvio → Offload App** [iOS Only], or **Settings → Apps → Nuvio → Storage → Clear Cache** [Android Mobile Only].
 - Restart Nuvio after clearing.
 
-**Step 4 — Toggle tunneled playback** [Android TV Only]
+**Step 4 — Toggle tunneled playback**
 
 If your network filters or throttles video traffic, tunneled playback can help route around it.
 

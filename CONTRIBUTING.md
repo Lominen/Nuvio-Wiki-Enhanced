@@ -14,7 +14,7 @@ Thank you for wanting to improve this community resource! Since this is an unoff
 ## Style Guide
 - Use clear, step-by-step instructions.
 - Use Markdown formatting for tables and code blocks.
-- Mark platform-specific content with `[Android TV Only]`, `[TV Only]`, `[Android Mobile Only]`, `[Mobile Only]`, `[iOS Only]`, `[WebOS Only]`, or `[Tizen Only]`. The existing `[TV Optimized]` and `[Required for Mobile]` qualifiers are also supported. These exact labels automatically render as badges and are not case-sensitive.
+- Mark platform-specific content with `[Android TV Only]`, `[TV Only]`, `[Android Mobile Only]`, `[Mobile Only]`, `[iOS Only]`, `[WebOS Only]`, `[Tizen Only]`, or `[Windows Only]`. For a combined badge, list the supported platforms without punctuation, for example `[Mobile Windows]`. These labels automatically render as badges and are not case-sensitive. The existing `[TV Optimized]` and `[Required for Mobile]` qualifiers are also supported.
 - Keep the **Disclaimer** visible in major entry points.
 
 ## Adding or Renaming Pages
