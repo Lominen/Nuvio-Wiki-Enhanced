@@ -3,7 +3,7 @@
 Nuvio offers a variety of player settings to customize your experience.
 
 > [!IMPORTANT]
-> Anything not labeled [Android TV Only] or [Mobile Only] is a feature of both versions.
+> Anything not labeled [Android TV Only], [Mobile Only], or [Windows Only] is available on Mobile, Android TV, and Windows.
 
 ---
 
@@ -30,7 +30,7 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 8. Copy the generated Client ID (a long string of numbers and letters).
 9. Go back into Nuvio, paste the Client ID, and select **Save**.
 
-**To submit Intros and Outros to IntroDB** [Mobile Only]:
+**To submit Intros and Outros to IntroDB** [Mobile Windows]:
 
 Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
 1. Go to [Intro DB](https://introdb.app).
@@ -40,9 +40,9 @@ Nuvio allows you to submit timestamps to IntroDB's community-sourced database. Y
 5. Copy the key.
 6. Go back into Nuvio, paste the API key, and select **Save**.
 
-**Automatic Skipping & Content Warnings** [Android TV Only]:
+**Automatic Skipping & Content Warnings**:
 - **Content Warnings:** Show parental guidance overlay when playback starts.
-- **Automatic Skipping:** Choose which segments (intros/outros) skip automatically without prompting.
+- **Automatic Skipping** [Android TV Only]: Choose which segments (intros/outros) skip automatically without prompting.
 
 [Back to top](#Nuvio-player-settings)
 
@@ -145,7 +145,7 @@ Controls how aggressively Nuvio searches for external subtitles when a video beg
 Controls the visual experience and interactions within the media player.
 
 - **Loading Overlay:** Displays a continuous loading screen or graphic to hide buffering, black screens, or transitions. The overlay remains visible until the first frame of the video is ready.
-- **Pause Overlay** [Android TV Only]: Shows a details overlay after 5 seconds while playback is paused.
+- **Pause Overlay:** Shows a details overlay after 5 seconds while playback is paused.
 - **OSD Clock** [Android TV Only]: Shows the current time and estimated end time while the transport controls are visible on screen.
 - **Player:** Dictates which video engine handles your streams.
   - *Internal:* Keeps you inside Nuvio using its native player.
@@ -170,9 +170,10 @@ Technical settings that determine how your device's hardware and software proces
   - *Off:* Don't change display refresh rate.
   - *On start:* Switch when playback starts.
   - *On start/stop:* Switch on start and restore on stop.
-- **Tunneled Playback:** An advanced Android TV feature. It allows audio and video streams to bypass standard OS pathways and process directly at the hardware level. This improves audio/video synchronization (lip-sync) and ensures smoother playback for heavy 4K HDR files.
-  - Normally, your TV's processor juggles everything at once: the video, the audio, the interface menus, and background apps. Tunneled Playback creates a fast lane that sends the raw video and audio straight to the TV's screen and speakers, completely bypassing the standard Android operating system.
-  - Recommendation: Leave this off by default. You should only turn this on if you are experiencing "lip-sync" issues (where the audio doesn't match the actors' mouths) or if massive 4K HDR files are dropping frames and stuttering. Because this feature bypasses the normal TV operating system, it can cause very weird glitches if your TV hardware doesn't perfectly support it.
+- **Tunneled Playback:** Uses an optimized low-level playback path for audio and video. This improves audio/video synchronization (lip-sync) and can provide smoother playback for demanding 4K HDR files.
+  - Normally, your device processes video, audio, interface elements, and background tasks through shared system pathways. Tunneled Playback creates a more direct route between the media stream and the device's playback hardware.
+  - Recommendation: Leave this off by default. Enable it if you experience lip-sync issues or if demanding 4K HDR files drop frames or stutter. Because hardware support varies between devices, disable it again if playback glitches occur.
+- **RTX Video Super Resolution** [Windows Only]: Upscales low-resolution video using NVIDIA RTX AI Super Resolution.
 - **Force AC-3 Transcoding (Optical/SPDIF):** Transcodes multichannel formats (TrueHD, DTS, AAC, etc.) to Dolby Digital 5.1 in real-time for Optical/SPDIF connections.
   - Older optical audio cables (the ones with the glowing red light) have a strict bandwidth limit. They physically cannot transmit heavy, modern, uncompressed audio formats like TrueHD or DTS-HD. They max out at standard Dolby Digital 5.1 (also known as AC-3).
   - If you have an older AV receiver or soundbar hooked up to your TV via an optical cable, trying to play a modern 4K movie with a TrueHD track will result in dead silence or horrible static. This setting acts as a live translator. It grabs the heavy modern audio and instantly crushes it down into standard Dolby Digital 5.1 on the fly, ensuring your older sound system can actually play the movie.

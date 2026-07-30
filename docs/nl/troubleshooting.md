@@ -50,7 +50,7 @@ Een beschadigde of te grote cache kan ervoor zorgen dat het afspelen hapert.
 - Op mobiel: **Apparaatinstellingen → Algemeen → iPhone-opslag → Nuvio → Ruim app op** [iOS Only], of **Instellingen → Apps → Nuvio → Opslag → Cache wissen** [Android Mobile Only].
 - Start Nuvio opnieuw op na het wissen.
 
-**Stap 4 — Schakel tunneled playback in/uit** [Android TV Only]
+**Stap 4 — Schakel Tunneled Playback in of uit**
 
 Als je netwerk video-verkeer filtert of knijpt, kan tunneled playback helpen om dit te omzeilen.
 

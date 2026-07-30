@@ -5,7 +5,7 @@ titleTemplate: false
 hero:
   name: Nuvio Wiki
   text: Alles wat je wilde weten over Nuvio, en een paar dingen die je niet wilt weten.
-  tagline: Het onofficiële centrum voor Nuvio, met uitgebreide handleidingen en troubleshooting voor gebruikers op alle platforms.
+  tagline: Het onofficiële centrum voor Nuvio, met uitgebreide handleidingen en hulp bij problemen.
   actions:
     - theme: brand
       text: Quick Start Guide

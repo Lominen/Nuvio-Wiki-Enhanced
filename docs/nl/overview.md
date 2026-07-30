@@ -26,23 +26,23 @@ graph TD
     %% Routing the stream
     Debrid --> Links[Opgeloste directe link]
     Links --> App
-    App --> Player[Interne / Externe player]
+    App --> Player[Interne / externe speler]
 ```
 
 ## Hoe het werkt
 
-Nuvio werkt met een modulaire architectuur op basis van **Addons**. Van zichzelf is Nuvio een "schone" player zonder ingebouwde inhoud.
+Nuvio werkt met een modulaire architectuur op basis van **addons**. Zonder addons is Nuvio een speler zonder ingebouwde inhoud.
 
-1.  **De App:** De schil die zorgt voor de gebruikersinterface, player en beheertools.
-2.  **Addons:** Externe modules die "inpluggen" op Nuvio om inhoudscatalogi aan te bieden (films, series, anime).
-3.  **Indexering:** Nuvio indexeert metadata van je ingeschakelde addons om een doorzoekbare database te creëren.
+1.  **De app:** De basis die de gebruikersinterface, speler en beheertools bevat.
+2.  **Addons:** Externe modules die aan Nuvio worden gekoppeld om inhoudscatalogi aan te bieden, zoals films, series en anime.
+3.  **Indexering:** Nuvio indexeert metadata van je ingeschakelde addons om een doorzoekbare database te maken.
 
-## Belangrijkste features
+## Belangrijkste functies
 
-- **Cross-platform:** Beschikbaar op Android (Mobiel & TV) en iOS.
+- **Cross-platform:** Beschikbaar op Android (Mobiel en TV), iOS en Windows.
 - **Gecentraliseerd zoeken:** Zoek tegelijkertijd in alle geïnstalleerde addons.
-- **Profiles:** Voeg profiles toe om alles gescheiden te houden.
+- **Profielen:** Voeg profielen toe om kijkgeschiedenis en voorkeuren gescheiden te houden.
 - **Intro/Outro overslaan:** Maakt gebruik van introDB om intro's en outro's over te slaan.
 - **Automatische bronselectie:** Speelt automatisch een bestand af op basis van je instellingen. Geen invoer nodig.
-- **Trakt-integration:** Synchroniseer je kijkgeschiedenis en lijsten.
+- **Trakt-integratie:** Synchroniseer je kijkgeschiedenis en lijsten.
 - **Aanpasbare gebruikersinterface:** Thema's en lay-outopties die bij je apparaat passen.
