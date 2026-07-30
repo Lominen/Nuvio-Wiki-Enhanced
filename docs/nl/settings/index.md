@@ -28,12 +28,12 @@ De instellingen van Nuvio bieden uitgebreide aanpassingsmogelijkheden. Hieronder
 - **Hardwareversnelling:** Schakel dit in als je haperingen ervaart op oudere apparaten.
 - **Volgende aflevering automatisch afspelen:** Start automatisch de volgende aflevering van een serie.
 - **RTX Video Super Resolution** [Windows Only]: Schaalt video met een lage resolutie op met NVIDIA RTX AI Super Resolution.
-- **Intro's en outro's overslaan:** Geeft prioriteit aan IntroDB, AniSkip en Anime Skip. Bevat hulpmiddelen voor het indienen van community-tijdstempels [Mobile Windows], inhoudswaarschuwingen op alle platforms en automatisch overslaan [Android TV Only].
+- **Intro's en outro's overslaan:** Geeft prioriteit aan IntroDB, AniSkip en Anime Skip. Bevat hulpmiddelen voor het indienen van community-tijdstempels [Mobile Windows], inhoudswaarschuwingen en automatisch overslaan [Android TV Only].
 - **Streamselectie en automatisch afspelen:** Stel onder andere *Reuse Last Link*, *Last Link Cache Duration*, de selectiemodus, time-outs en filters voor plug-ins en addons in.
 - **Binge-opties:** Beheer afspeelreeksen met *Prefer Binge Group*, *Reuse Binge Groups* en *Next Episode Threshold Mode*. *Are You Still Watching?* [Android TV Only] vraagt na meerdere afleveringen of je nog kijkt.
 - **Voorkeuren voor ondertiteling en audio:** Stelt primaire en secundaire talen in, filtert ongewenste sporen, kan stiltes overslaan en biedt een downmixoptie om meerkanaals surroundgeluid naar helder stereogeluid om te zetten.
 - **Weergave van ondertiteling:** Past de grootte, verticale positie, tekstkleur, achtergrondkleur en omlijning van ondertitels aan. Bevat ook een experimentele optie voor de **libass-renderingengine** voor complexe ASS/SSA-ondertiteling.
-- **Interface- en bedieningsoverlays:** Bevat laad- en pauzeoverlays op alle platforms, een systeemklok in de speler [Android TV Only], snelheidsbediening via aanraken en verticale veeggebaren voor volume en helderheid [Mobile Only].
+- **Interface- en bedieningsoverlays:** Bevat laad- en pauzeoverlays, een systeemklok in de speler [Android TV Only], snelheidsbediening via aanraken en verticale veeggebaren voor volume en helderheid [Mobile Only].
 
 [Terug naar boven](#overzicht-van-de-instellingen)
 
