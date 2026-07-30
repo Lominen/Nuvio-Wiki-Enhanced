@@ -3,7 +3,7 @@
 Nuvio biedt verschillende player settings om je ervaring aan te passen.
 
 > [!IMPORTANT]
-> Elke feature die niet specifiek is gelabeld met [Android TV Only] of [Mobile Only], is beschikbaar op beide versies.
+> Elke feature die niet specifiek is gelabeld met [Android TV Only], [Mobile Only] of [Windows Only], is beschikbaar op Mobile, Android TV en Windows.
 
 ---
 
@@ -30,7 +30,7 @@ Nuvio maakt gebruik van drie afzonderlijke databases voor het overslaan van intr
 8. Kopieer de gegenereerde Client ID (een lange reeks cijfers en letters).
 9. Ga terug naar Nuvio, plak de Client ID en selecteer **Opslaan** (Save).
 
-**Om intro's en outro's in te dienen bij IntroDB [Mobile Only]:**
+**Intro's en outro's indienen bij IntroDB** [Mobile Windows]:
 
 Nuvio stelt je in staat om tijdstempels in te dienen bij de door de community gevulde database van IntroDB. Hiervoor heb je een API-sleutel nodig:
 1. Ga naar [Intro DB](https://introdb.app).
@@ -40,9 +40,9 @@ Nuvio stelt je in staat om tijdstempels in te dienen bij de door de community ge
 5. Kopieer de sleutel.
 6. Ga terug naar Nuvio, plak de API-sleutel en selecteer **Opslaan** (Save).
 
-**Automatisch overslaan & Inhoudswaarschuwingen [Android TV Only]:**
+**Automatisch overslaan & Inhoudswaarschuwingen:**
 - **Content Warnings:** Toont een ouderlijk toezicht overlay wanneer het afspelen start.
-- **Automatic Skipping:** Kies welke segmenten (intro's/outro's) automatisch worden overgeslagen zonder melding.
+- **Automatic Skipping** [Android TV Only]: Kies welke segmenten (intro's/outro's) automatisch worden overgeslagen zonder melding.
 
 [Terug naar boven](#Nuvio-player settings)
 
@@ -144,7 +144,7 @@ Bepaalt hoe intensief Nuvio zoekt naar externe ondertitels wanneer een video beg
 Regelt de visuele ervaring en interactie binnen de media player.
 
 - **Loading Overlay:** Toont een laadscherm of laadanimatie om bufferen, zwarte schermen of overgangen te verbergen. De overlay blijft zichtbaar tot het eerste frame van de video klaar is.
-- **Pause Overlay** [Android TV Only]: Toont een detail-overlay na 5 seconden wanneer het afspelen is gepauzeerd.
+- **Pause Overlay:** Toont een detail-overlay na 5 seconden wanneer het afspelen is gepauzeerd.
 - **OSD Clock** [Android TV Only]: Toont de huidige tijd en de geschatte eindtijd wanneer de afspeelbediening op het scherm zichtbaar is.
 - **Player (Player):** Bepaalt welke video-engine je streams verwerkt.
   - *Internal:* Houdt je binnen Nuvio met de ingebouwde player.
@@ -169,9 +169,10 @@ Technische instellingen die bepalen hoe de hardware en software van je apparaat 
   - *Off:* Wijzig de verversingssnelheid niet.
   - *On start:* Schakel over wanneer het afspelen begint.
   - *On start/stop:* Schakel over bij de start en herstel de oorspronkelijke snelheid bij het stoppen.
-- **Tunneled Playback:** Een geavanceerde Android TV-feature. Hiermee kunnen audio- en videostreams de standaard OS-paden omzeilen en direct op hardwareniveau worden verwerkt. Dit verbetert de synchronisatie tussen audio en video (lip-sync) en zorgt voor een soepelere weergave van zware 4K HDR-bestanden.
-  - Normaal gesproken verdeelt de processor van je TV zijn aandacht over alles tegelijk: the video, the audio, the menu-interfaces en achtergrondapps. Tunneled Playback creëert een snelle route die de ruwe video and audio rechtstreeks naar het scherm en de luidsprekers van de TV stuurt, en het standaard Android-besturingssysteem volledig omzeilt.
-  - Aanbeveling: Laat dit standaard uit staan. Schakel dit alleen in als je te maken hebt met lip-sync-problemen (waarbij het geluid niet overeenkomt met de mond van de acteurs) of als enorme 4K HDR-bestanden frames verliezen en stotteren. Omdat deze feature het normale besturingssysteem van de TV omzeilt, kan het vreemde glitches veroorzaken als je TV-hardware het niet perfect ondersteunt.
+- **Tunneled Playback:** Gebruikt een geoptimaliseerd afspeelpad op laag niveau voor audio en video. Dit verbetert de synchronisatie tussen beeld en geluid en kan veeleisende 4K HDR-bestanden soepeler afspelen.
+  - Normaal verwerkt je apparaat video, audio, interface-elementen en achtergrondtaken via gedeelde systeempaden. Tunneled Playback maakt een directere verbinding tussen de mediastream en de afspeelhardware van het apparaat.
+  - Aanbeveling: Laat deze optie standaard uitgeschakeld. Schakel haar in bij synchronisatieproblemen of wanneer veeleisende 4K HDR-bestanden frames overslaan of haperen. Schakel de optie weer uit als er door beperkte hardwareondersteuning afspeelproblemen ontstaan.
+- **RTX Video Super Resolution** [Windows Only]: Schaalt video met een lage resolutie op met NVIDIA RTX AI Super Resolution.
 - **Force AC-3 Transcoding (Optisch/SPDIF):** Zet meerkanaals formaten (TrueHD, DTS, AAC, etc.) in realtime om naar Dolby Digital 5.1 voor optische/SPDIF-verbindingen.
   - Oudere optische audiokabels (met het rode lampje) hebben een strikte bandbreedtebeperking. Ze kunnen moderne, niet-gecomprimeerde audioformaten zoals TrueHD of DTS-HD fysiek niet doorsturen. Ze ondersteunen maximaal standaard Dolby Digital 5.1 (ook bekend als AC-3).
   - Als je een oudere AV-ontvanger of soundbar hebt die via een optische kabel op je TV is aangesloten, zal het afspelen van een moderne 4K-film met een TrueHD-track resulteren in stilte of harde ruis. Deze instelling werkt als een live vertaler: het pakt de zware moderne audio en zet deze direct om naar standaard Dolby Digital 5.1, zodat je oudere audiosysteem de film daadwerkelijk kan afspelen.

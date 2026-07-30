@@ -33,7 +33,7 @@ Nuvio's settings allow for deep customization. Below is a detailed breakdown, no
 - **Binge Watching Options:** Customizes automated series playback chains via *Prefer Binge Group* rules, *Reuse Binge Groups*, variable *Next Episode Threshold Mode* percentages, and idle security prompts via *Are You Still Watching?* [Android TV Only].
 - **Subtitle and Audio Preferences:** Locks primary and secondary multi-track audio/subtitle languages, filters out non-preferred tracking layers, uses a *Skip Silence* trigger, and offers an *Enable downmix* route to crush multichannel surround sound into clear stereo speaker arrays.
 - **Subtitle Layout Adjustments:** Tailors caption scaling sizes, custom text/background color profiles, outline parameters, and *Vertical Offset*. Includes an experimental toggle to deploy the **libass rendering engine** for heavy ASS/SSA dynamic typesetting scripts.
-- **Interface & Control Overlays:** Features standard *Loading Overlays* to hide network lag. Includes passive informational *Pause Overlays*, *OSD System Clocks* [Android TV Only], touchscreen *Hold To Speed / Hold Speed* scaling multipliers, and sliding vertical *Gesture Controls* for volume/brightness [Mobile Only].
+- **Interface & Control Overlays:** Features standard *Loading Overlays*, passive informational *Pause Overlays*, *OSD System Clocks* [Android TV Only], touchscreen *Hold To Speed / Hold Speed* scaling multipliers, and sliding vertical *Gesture Controls* for volume/brightness [Mobile Only].
 
 [Back to top](#settings-breakdown)
 
@@ -49,11 +49,12 @@ Nuvio's settings allow for deep customization. Below is a detailed breakdown, no
 
 [Back to top](#settings-breakdown)
 
-## 4. Advanced [Android TV Only]: [View Playback Guide](player.md)
+## 4. Advanced: [View Playback Guide](player.md)
 - **Decoder Priority:** Dictates processing priorities across *Device decoders only* (strict hardware parsing), *Prefer device decoders* (hardware priority with software fallbacks), or *Prefer app decoders (FFmpeg)* (software processing for legacy formats).
-- **Advanced Display Formatting:** Uses standard *DV7 - HEVC Fallback* layers to fix distorted purple/green color rendering profiles. Adds options for *Preserve DV mapping (DV7 to DV8.1)* and *Convert DV5 to DV8.1* matrices.
-- **Refresh Rate Switching (AFR):** Automatically matches your TV's refresh rate to the content (e.g., 24fps) to eliminate judder. Configurable as *Off*, *On start*, or *On start/stop* parameters.
-- **Tunnelled Playback:** Improves synchronization and reduces overhead on supported Android TV hardware. It sends raw video streams directly to the display chips to optimize heavy 4K HDR playback rendering chains.
+- **DV7 - HEVC Fallback:** Fixes distorted purple or green colors by falling back from unsupported Dolby Vision Profile 7 video to standard HEVC.
+- **Dolby Vision Mapping** [Android TV Only]: Includes *Preserve DV mapping (DV7 to DV8.1)* and *Convert DV5 to DV8.1*.
+- **Refresh Rate Switching (AFR)** [Android TV Only]: Automatically matches your TV's refresh rate to the content (e.g., 24fps) to eliminate judder. Configurable as *Off*, *On start*, or *On start/stop* parameters.
+- **Tunnelled Playback:** Improves synchronization and reduces overhead by using an optimized low-level playback path on supported devices. This can provide smoother playback for demanding 4K HDR video.
 - **Force AC-3 Transcoding (Optical/SPDIF):** Live-transcodes heavy modern multichannel sound formats (TrueHD, DTS, AAC) into traditional compressed Dolby Digital 5.1 tracks to maintain output over bandwidth-limited digital optical audio connections.
 
 [Back to top](#settings-breakdown)
