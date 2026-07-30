@@ -171,6 +171,16 @@ body {
   border-color: var(--vp-c-border);
 }
 
+@media (min-width: 769px) {
+  .settings-overview-page .vp-doc table:first-of-type {
+    table-layout: fixed;
+  }
+
+  .settings-overview-page .vp-doc table:first-of-type th:first-child {
+    width: 16%;
+  }
+}
+
 .vp-doc .custom-block {
   border-width: 1px;
   border-radius: 10px;
