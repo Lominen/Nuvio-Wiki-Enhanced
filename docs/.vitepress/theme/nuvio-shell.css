@@ -515,19 +515,19 @@ a.nuvio-sidebar__section-trigger {
   }
 
   html.nuvio-sidebar-collapsed .nuvio-sidebar,
-  html:not(.nuvio-sidebar-hovered) .Layout:has(.VPContent.is-home) .nuvio-sidebar {
+  html.nuvio-sidebar-collapsed:not(.nuvio-sidebar-hovered) .Layout:has(.VPContent.is-home) .nuvio-sidebar {
     transform: translateX(-100%);
   }
 
   html.nuvio-sidebar-collapsed .VPContent,
   html.nuvio-sidebar-collapsed .VPContent.has-sidebar,
-  .Layout:has(.VPContent.is-home) .VPContent,
-  .Layout:has(.VPContent.is-home) .VPContent.has-sidebar {
+  html.nuvio-sidebar-collapsed .Layout:has(.VPContent.is-home) .VPContent,
+  html.nuvio-sidebar-collapsed .Layout:has(.VPContent.is-home) .VPContent.has-sidebar {
     padding-left: 0 !important;
   }
 
   html.nuvio-sidebar-collapsed:not(.nuvio-sidebar-hovered) .nuvio-sidebar__edge,
-  html:not(.nuvio-sidebar-hovered) .Layout:has(.VPContent.is-home) .nuvio-sidebar__edge {
+  html.nuvio-sidebar-collapsed:not(.nuvio-sidebar-hovered) .Layout:has(.VPContent.is-home) .nuvio-sidebar__edge {
     position: fixed;
     z-index: 61;
     inset: 0 auto 0 0;
@@ -536,7 +536,7 @@ a.nuvio-sidebar__section-trigger {
   }
 
   html.nuvio-sidebar-collapsed:not(.nuvio-sidebar-hovered) .nuvio-sidebar__rail,
-  html:not(.nuvio-sidebar-hovered) .Layout:has(.VPContent.is-home) .nuvio-sidebar__rail {
+  html.nuvio-sidebar-collapsed:not(.nuvio-sidebar-hovered) .Layout:has(.VPContent.is-home) .nuvio-sidebar__rail {
     position: fixed;
     z-index: 62;
     top: 16px;
