@@ -106,3 +106,14 @@ This is the easier path for typing or pasting a long URL.
 - Open any title and check its source list — a working provider shows up by name alongside your addon sources.
 - In Settings, the repository should show as enabled with a recent fetch/update timestamp rather than an error state.
 - If no providers appear after adding a repository, re-check that you enabled at least one provider inside it — the repository and its providers are toggled separately.
+
+[Back to top](#Plugins)
+
+---
+
+## Plugin Provider Settings
+
+These toggles are found in the same plugin settings area under **Settings > Content & Discovery > Plugins** and control how enabled providers behave across the app.
+
+- **Enable plugin providers globally:** A master toggle that activates or deactivates all installed plugin providers at once. When off, no plugin providers will be queried during source searches, regardless of individual provider toggles.
+- **Group plugin providers by repository:** When enabled, the source-selection list groups results from each plugin repository together under its repository name, making it easier to identify which repository supplied each stream result.

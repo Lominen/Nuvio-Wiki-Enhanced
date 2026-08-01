@@ -15,6 +15,10 @@ TMDB (The Movie Database) acts as the foundation for your metadata, pulling in h
 1. Navigate to **Integrations** > **TMDB Enrichment**.
 2. Toggle **Enable TMDB Enrichment** to the on position.
 3. Paste your v3 key into the **Personal API key** field and click Save.
+
+> [!NOTE]
+> The TMDB Personal API key is required on the **Mobile** app. The Android TV app does not require a personal API key for TMDB enrichment.
+
 4. Set your preferred **Language code** (e.g., `en` for English).
 5. Toggle your desired metadata modules. Available modules include:
     - **Artwork** (Logos and backdrops)
@@ -43,7 +47,7 @@ MDBList aggregates rating scores from multiple platforms so you can see audience
 1. Navigate to **Integrations** > **MDBList Ratings**.
 2. Toggle **Enable MDBList Ratings** to the on position.
 3. Paste your key into the **API Key** field and click Save.
-4. Select the external rating providers you wish to display. Supported options include **IMDb**, **TMDB**, **Rotten Tomatoes**, **Metacritic**, **Trakt**, **Letterboxd**, and **Audience Score**.
+4. Select the external rating providers you wish to display. Supported options include **IMDb**, **TMDB**, **Rotten Tomatoes**, **Metacritic**, **Trakt**, **Letterboxd**, **MyAnimeList**, and **Audience Score**.
 
 [Back to top](#table-of-contents)
 
@@ -63,7 +67,7 @@ You do not need to manually generate an API key for Trakt.
 4. Once connected, your status will update to show your Trakt username.
 
 **Library and Sync Options:**
-After authenticating, customize your tracking features.
+After authenticating, customize your tracking features. These settings are available on both Mobile and Android TV.
 
 - **Library Source:** Choose which library to use for saving and viewing your collection. Options include **Trakt** or **Nuvio**.
 - **Watch Progress:** Choose which progress source powers resume and continue watching. Options include **Trakt** or **Nuvio Sync**.
@@ -93,5 +97,22 @@ Jellyfin connects directly to the HTTPS server URL you provide with your Jellyfi
 4. Select the data categories available for that pairing, such as watched history, playback progress, watchlist, or collection.
 5. Run **Preview** first. Review matched items, automatic ID and episode remapping, skipped items, and any warnings before writing to the destination.
 6. Once the preview looks right, start the sync and keep the page open until it finishes.
+
+[Back to top](#table-of-contents)
+
+---
+
+### Simkl Integration
+
+Simkl syncs your anime, TV, and movie watch history across your devices with a focus on anime tracking. Both Mobile and Android TV support Simkl.
+
+**How to Connect Simkl:**
+1. Navigate to **Settings** > **Tracking**.
+2. Click the **Connect Simkl** button.
+3. This will prompt you to sign in to your Simkl account and authorize Nuvio.
+4. Once connected, your status will update to show your Simkl username.
+
+**Simkl Options:**
+- **Anime ID preference:** Choose which ID source Simkl uses to match anime titles.
 
 [Back to top](#table-of-contents)

@@ -21,13 +21,13 @@ The badge JSON is hosted at a URL (e.g., on GitHub) and imported once into your 
 
 Navigate to one of these locations depending on your Nuvio version:
 
-- Mobile: **Settings → Streams → Badge URL**
-- TV: **Settings → Layout → Streams → Badge URL**
+- Mobile: **Settings → Streams → Fusion badge URLs**
+- TV: **Settings → Layout → Streams → Fusion badge URLs**
 
 ### How to import
 
 1. Obtain a badge JSON URL (see [Community Badge Sets](#community-badge-sets) below).
-2. Open Nuvio and go to the Badge URL field in settings.
+2. Open Nuvio and go to the Fusion badge URLs field in settings.
 3. Paste the direct URL to the `.json` file.
 4. Press **Import**.
 5. You should see a confirmation such as `1/3 URLs imported`.
@@ -285,7 +285,7 @@ If you prefer to write your own badge JSON, Nuvio uses the following schema:
 | Problem | Solution |
 | :--- | :--- |
 | Badges not appearing after import | Ensure you are using the **raw** GitHub URL (starts with `raw.githubusercontent.com`). |
-| Badge URL disappears after saving | Known bug — import the URL and **exit without pressing Save**. |
+| Fusion badge URLs field disappears after saving | Known bug — import the URL and **exit without pressing Save**. |
 | Badges showing but wrong priority | The badge set's `filters` array order controls priority. Re-order entries or use Badger to adjust. |
 | No badges on streams from a specific addon | The addon may not include quality metadata in stream titles. Check the addon's output format. |
 | Badges look different from screenshots | Badge appearance depends on the set you imported. Colors and icons are fully customizable — different sets look different. |

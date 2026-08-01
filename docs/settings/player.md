@@ -42,7 +42,7 @@ Nuvio allows you to submit timestamps to IntroDB's community-sourced database. Y
 
 **Automatic Skipping & Content Warnings**:
 - **Content Warnings:** Show parental guidance overlay when playback starts.
-- **Automatic Skipping** [Android TV Only]: Choose which segments (intros/outros) skip automatically without prompting.
+- **Automatic Skipping** [Android TV Only]: Choose which segments (intros, outros, and recaps) skip automatically without prompting.
 
 [Back to top](#Nuvio-player-settings)
 
@@ -55,7 +55,7 @@ Nuvio allows you to submit timestamps to IntroDB's community-sourced database. Y
 Stream selection includes two main options:
 
 - **Reuse Last Link:** When resuming a title, Nuvio will attempt to use the exact same stream you selected during your previous session.
-- **Last Link Cache Duration:** Determines how long Nuvio holds onto the last selected link. Options include 1, 6, and 12 hours, as well as 1, 2, 3, and 7 days.
+- **Last Link Cache Duration:** Determines how long Nuvio holds onto the last selected link. Options include 1, 2, 3, 6, and 12 hours, as well as 1, 2, 3, and 7 days.
 
 > [!NOTE]
 > Debrid service links are typically only valid for a specific time period. Selecting a duration that is too long can cause Nuvio to attempt playback on an expired, invalid link.
@@ -64,11 +64,11 @@ Stream selection includes two main options:
 
 This section dictates how the application behaves when you select a media item, whether it automatically launches a stream or lets you choose your own link.
 
-**Selection Mode**
+**Auto Stream Selection**
 Determines the logic used to handle available streams:
 - **Auto-play first source:** Automatically scans for media streams and instantly plays the first valid source it encounters without prompting you.
 - **Manual:** Displays a comprehensive list of all discovered streams, allowing you to manually review and select based on quality, file size, or source.
-- **Regex (Regular Expression):** An advanced filtering mode that scans stream titles or metadata for specific text patterns (e.g., 1080p, 4K, HEVC, specific release groups) and prioritizes or filters matches based on your custom expressions.
+- **Auto-play regex match:** An advanced filtering mode that scans stream titles or metadata for specific text patterns (e.g., 1080p, 4K, HEVC, specific release groups) and prioritizes or filters matches based on your custom regular expressions.
 
 **Stream Selection Timeout**
 Sets the maximum duration the application will wait for addons or plugins to return their results before proceeding:
@@ -102,6 +102,8 @@ The Next Episode category includes several settings to optimize continuous viewi
   - *At 100%:* Nuvio will not begin the source selection process until the media is completely finished.
   - *At 97%:* Nuvio will begin the source selection process when the media is 97% complete (e.g., for a 30-minute show, selection begins at 29 minutes and 6 seconds).
 - **Are You Still Watching?** [Android TV Only]: Prompts the user after a set number of consecutive auto-played episodes to prevent infinite playback if you fall asleep.
+  - *Episode Threshold:* Configures the number of consecutive auto-played episodes before the prompt appears.
+- **Show loading status:** Displays a loading status indicator during the next-episode source selection process.
 
 [Back to top](#Nuvio-player-settings)
 
@@ -114,9 +116,12 @@ These settings determine the default spoken language tracks selected when a stre
 - **Preferred Audio Language:** The primary spoken language you want the application to automatically select if the media file contains multiple audio tracks.
 - **Secondary Audio Language:** Your fallback audio track if the primary choice is unavailable.
 - **Skip Silence:** Dynamically skips silent portions of audio during playback.
+- **Remember audio delay per device:** Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
 - **Enable downmix:** Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
   - "Downmixing" means taking a massive surround sound audio track (like 5.1 or 7.1 audio meant for 6 to 8 speakers) and squishing it down into just two channels (Left and Right) for a standard stereo setup.
   - If you are just using your built-in TV speakers or a basic 2.0 soundbar, your system physically cannot play the dedicated "center channel" where 90% of the dialogue comes from in modern movies. If you ever feel like the explosions are deafening but the actors' voices are whispering, it is because you are missing the center channel. Turning this on forces the app to correctly blend all those surround sound speakers into a stereo format so you can hear the voices clearly.
+- **Maintain original audio on downmix:** When enabled, preserves the original audio track alongside the downmixed stereo output. Useful if you switch between speaker setups.
+- **Number of channels:** Sets the output channel configuration. Options include 2.0 (Stereo), 5.1, 6.1, and 7.1. Choose the configuration that matches your speaker or soundbar setup.
 
 ### Subtitle Preferences
 These configurations control which text translations are displayed on screen and how menus are filtered.
@@ -124,7 +129,7 @@ These configurations control which text translations are displayed on screen and
 - **Secondary Preferred Language:** Your fallback subtitle language.
 - **Use Forced Subtitles (Toggle On/Off):** Prioritizes "forced" subtitles that match your preferred language. Forced subtitles translate foreign languages, alien dialogue, or on-screen text while the rest of the media remains in your primary spoken language.
 - **Show Only Preferred Languages (Toggle On/Off):** Filters the subtitle menu to hide all tracks except those that exactly match your primary and secondary language preferences.
-- **Subtitle Styling** [TV Optimized]: Offers granular control over subtitle aesthetics including **Size (Scaling)**, **Vertical Offset** (to accommodate letterboxing), **Text Color**, **Background Color**, and **Outline/Outline Color**.
+- **Subtitle Styling:** Offers granular control over subtitle aesthetics including **Size (Scaling)**, **Vertical Offset** (to accommodate letterboxing), **Text Color**, **Background Color**, **Outline/Outline Color**, and **Bold** (use bold font weight for subtitles).
 - **Use libass for ASS/SSA subtitles:** An experimental toggle to use the advanced libass engine for rendering complex styles, positioning, and animations of ASS/SSA subtitles.
   - Turning this on tells the player to use a specialized graphics engine (libass) to draw complex subtitles perfectly. If left off, the player might strip out all the colors and placement formatting, or worse, crash trying to read the file.
   - *Libass Render Mode* [Android TV Only]: When libass is enabled, select the exact rendering pipeline: *Overlay OpenGL* (Recommended for best quality and HDR support), *Overlay Canvas* (HDR support without OpenGL), *Effects OpenGL* (Animation support with Media3 effects), *Effects Canvas*, or *Standard Cues* (Basic subtitle rendering without animation).
@@ -154,7 +159,7 @@ Controls the visual experience and interactions within the media player.
   - *External:* Passes the video link to a third-party application installed on your device (e.g., VLC, MX Player).
 - **Hold To Speed** [Mobile Only]: A touch-screen shortcut for skimming. Pressing and holding anywhere on the video player temporarily increases playback speed. Normal playback resumes when released.
 - **Hold Speed** [Mobile Only]: Configures the exact playback speed multiplier when using the "Hold To Speed" feature.
-- **Gesture Controls** [Mobile Only]: Activates vertical touchscreen sliding regions on the left and right sides of the screen panel to quickly adjust local volume and brightness.
+- **Touch Gestures** [Mobile Only]: Enables swipes and double-taps on the player screen to seek forward/backward, adjust brightness (left side), or adjust volume (right side).
 
 ### Advanced Processing & Decoding
 Technical settings that determine how your device's hardware and software process raw video and audio data.
@@ -166,6 +171,8 @@ Technical settings that determine how your device's hardware and software proces
 - **DV7 - HEVC Fallback:** Dolby Vision Profile 7 (DV7) is a premium HDR format. Playing a DV7 file on unsupported hardware often results in distorted colors (e.g., a completely purple or green screen). Enabling this strips the unreadable Dolby Vision data and maps the video down to standard HEVC (H.265) for correct color playback.
 - **Preserve DV mapping (DV7 to DV8.1)** [Android TV Only]: Keeps original creator-intended tone-mapping at the cost of slightly more processing power per frame.
 - **Convert DV5 to DV8.1** [Android TV Only]: Signals Profile 5 streams as Profile 8.1 for HDR10-compatible output, helping correctly map colors on devices that lack a native DV5 decoder.
+- **Strip HDR10+ Metadata:** Removes HDR10+ dynamic metadata from the video stream. Useful if your display does not support HDR10+ and the metadata causes rendering issues.
+- **Hardware Decoding (mpv-only):** When using the libmpv engine, toggles hardware-accelerated decoding on or off for that engine specifically.
 - **Auto Frame Rate & Resolution** [Android TV Only]: Dynamically adjusts your television hardware's refresh rate to natively match the source file frame pacing, eliminating panning judder. Options include:
   - *Off:* Don't change display refresh rate.
   - *On start:* Switch when playback starts.
@@ -298,6 +305,8 @@ Deploys download-path controls that determine how aggressively progressive and t
 - **Connection Count:** Number of concurrent range connections. Higher values can raise throughput on CDNs that throttle per connection, but also increase memory and connection overhead.
 - **Chunk Size:** Size of each range request piece per connection. Larger chunks reduce request overhead; smaller chunks can adapt faster on some hosts.
 - **P2P Streaming:** Enables or restricts direct processing configurations for raw peer-to-peer (torrent) streams.
+- **Torrent profile** [Mobile Only]: Selects the torrent client configuration profile used for P2P streaming on mobile devices.
+- **Torrent cache size** [Mobile Only]: Sets the maximum disk cache allocated for torrent stream data on mobile devices.
 - **Hide torrent stats:** Suppresses real-time peer connection logs, seed counts, and download speed overlays from appearing during loading and playback screens.
 
 #### Why parallel connections exist
@@ -553,6 +562,16 @@ The MPV configuration in Nuvio currently focuses on **Hardware Decoding**. This 
 - **Disabled (no)**
   - *What it is:* Pure software decoding.
   - *What it does:* Completely turns off the hardware chips and forces your device's main processor (CPU) to do all the heavy lifting.
+
+### Additional MPV Options [Mobile Only]
+
+The Mobile app exposes additional libmpv configuration options:
+
+- **libmpv Hardware Decoding:** A simple toggle to enable or disable hardware-accelerated decoding within the libmpv engine. On Mobile, this is a straightforward on/off toggle rather than the multi-option dropdown available on Android TV.
+- **libmpv Renderer:** Selects the rendering pipeline used by the libmpv engine.
+  - *GPU next:* The modern, next-generation GPU rendering path. Recommended for most devices.
+  - *GPU:* The legacy GPU rendering path. Use as a fallback if *GPU next* causes visual artifacts.
+- **libmpv YUV420P Compatibility:** Forces libmpv to use YUV420P pixel format output for maximum compatibility with device display pipelines. Enable this if you experience color issues or rendering glitches with specific video files on your mobile device.
 
 ---
 
