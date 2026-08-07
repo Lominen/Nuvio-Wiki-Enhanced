@@ -34,7 +34,8 @@ import {
   retryBridgeOperation,
   sleep,
   waitForWriteSlot,
-  type AsyncLimiter
+  type AsyncLimiter,
+  type BridgeRequestInit
 } from './transport.ts'
 
 export { requestBridgeJson } from './transport.ts'
@@ -57,7 +58,12 @@ const TRAKT_PAGE_CONCURRENCY = 4
 const SIMKL_PROGRESS_IMPORT_TIMEOUT_MS = 30_000
 const NUVIO_METADATA_BATCH_SIZE = 400
 const NUVIO_METADATA_BATCH_CONCURRENCY = 4
+const NUVIO_METADATA_REQUEST_TIMEOUT_MS = 120_000
+const NUVIO_ADDON_QUERY_TIMEOUT_MS = 12_000
+const ADDON_RESOURCE_TIMEOUT_MS = 12_000
+const NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS = 45_000
 const NUVIO_KITSU_SEARCH_CONCURRENCY = 6
+const NUVIO_KITSU_PROGRESS_INTERVAL = 25
 const LOCAL_SERVER_WRITE_CONCURRENCY = 4
 const NUVIO_WRITE_CONCURRENCY = 3
 const STREMIO_WRITE_CONCURRENCY = 2
@@ -778,7 +784,8 @@ export async function nuvioRpc(
 export async function nuvioRest(
   connection: BridgeConnection,
   path: string,
-  params: Record<string, any> = {}
+  params: Record<string, any> = {},
+  options: Omit<BridgeRequestInit, 'body' | 'headers' | 'method'> = {}
 ): Promise<any> {
   if (connection.credentials.service !== 'nuvio') throw new Error('Expected Nuvio credentials.')
   const token = await ensureNuvioToken(connection)
@@ -787,6 +794,7 @@ export async function nuvioRest(
     if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
   }
   const { data } = await requestBridgeJson(url.toString(), {
+    ...options,
     headers: {
       apikey: connection.credentials.publicKey,
       Authorization: `Bearer ${token}`,
@@ -2964,7 +2972,9 @@ async function enrichNuvioMetadataChunk(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items })
+        body: JSON.stringify({ items }),
+        timeoutMs: NUVIO_METADATA_REQUEST_TIMEOUT_MS,
+        timeoutMessage: 'Nuvio TMDB metadata enrichment did not finish before its deadline.'
       }
     )
     const results = Array.isArray(data?.results) ? data.results : []
@@ -3032,7 +3042,7 @@ async function loadBridgeMetadata(
     }
     logTo(
       log,
-      `Nuvio metadata batches complete: ${Math.min(offset + wave.length, metadataChunks.length)}/${metadataChunks.length}.`
+      `Nuvio TMDB metadata batches complete: ${Math.min(offset + wave.length, metadataChunks.length)}/${metadataChunks.length}; checking add-on identities next.`
     )
   }
 
@@ -3106,6 +3116,10 @@ export async function enrichMediaBridgeBundle(
     record.media = withResolvedExternalIds(record.media, metadata.get(record.media))
   }
   if (nuvioConnection?.service === 'nuvio') {
+    // Keep one add-on snapshot for planning, but start every preview/run with a
+    // fresh attempt so a previous authorization or network failure cannot
+    // poison later syncs until the page is reloaded.
+    invalidateNuvioMetadataCaches(nuvioConnection)
     await enrichNuvioKitsuAliases(
       nuvioConnection,
       records.map(record => record.media),
@@ -3949,7 +3963,11 @@ async function fetchStremioKitsuMeta(
               addonResourceUrl(
                 addon.baseUrl,
                 `meta/${encodeURIComponent(type)}/${encodeURIComponent(contentId)}.json`
-              )
+              ),
+              {
+                timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+                timeoutMessage: 'A Stremio Kitsu metadata request did not respond before the deadline.'
+              }
             )
             if (data?.meta) return data.meta
           } catch {
@@ -4518,23 +4536,46 @@ function kitsuSearchCatalogs(manifest: any): NuvioSearchCatalog[] {
     }))
 }
 
-async function nuvioMetadataAddons(connection: BridgeConnection): Promise<NuvioMetaAddon[]> {
+async function nuvioMetadataAddons(
+  connection: BridgeConnection,
+  log?: BridgeLog,
+  signal?: AbortSignal
+): Promise<NuvioMetaAddon[]> {
   const cacheKey = `${connection.accountId}:${connection.profileId}`
   if (!nuvioAddonCache.has(cacheKey)) {
-    nuvioAddonCache.set(cacheKey, (async () => {
-      const rows = await nuvioRest(connection, 'addons', {
-        select: 'url,name,sort_order,profile_id,enabled',
-        profile_id: `eq.${Number(connection.profileId)}`,
-        order: 'sort_order.asc'
-      })
+    const request = (async () => {
+      let rows: any
+      try {
+        rows = await nuvioRest(connection, 'addons', {
+          select: 'url,name,sort_order,profile_id,enabled',
+          profile_id: `eq.${Number(connection.profileId)}`,
+          order: 'sort_order.asc'
+        }, {
+          signal,
+          timeoutMs: NUVIO_ADDON_QUERY_TIMEOUT_MS,
+          timeoutMessage: 'Nuvio did not return the enabled add-ons before the deadline.'
+        })
+      } catch (error: any) {
+        logTo(
+          log,
+          `Warning: Could not read enabled Nuvio add-ons (${error?.message || 'request failed'}); continuing without optional Kitsu enrichment.`
+        )
+        return []
+      }
       const addons: NuvioMetaAddon[] = []
       for (const row of Array.isArray(rows) ? rows : []) {
+        if (signal?.aborted) throw signal.reason
         if (!row?.url || row.enabled === false) continue
         const baseUrl = addonBaseUrl(row.url)
         if (!baseUrl) continue
         try {
           const manifest = (await requestBridgeJson(
-            addonResourceUrl(baseUrl, 'manifest.json')
+            addonResourceUrl(baseUrl, 'manifest.json'),
+            {
+              signal,
+              timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+              timeoutMessage: 'A Nuvio add-on manifest did not respond before the deadline.'
+            }
           )).data
           const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
           if (resources.some((resource: any) => manifestResourceName(resource) === 'meta')) {
@@ -4543,14 +4584,22 @@ async function nuvioMetadataAddons(connection: BridgeConnection): Promise<NuvioM
               kitsuSearchCatalogs: kitsuSearchCatalogs(manifest)
             })
           }
-        } catch {
+        } catch (error) {
+          if (signal?.aborted) throw signal.reason || error
           // Try the next enabled addon.
         }
       }
       return addons
-    })())
+    })()
+    nuvioAddonCache.set(cacheKey, request)
   }
-  return nuvioAddonCache.get(cacheKey)!
+  const pending = nuvioAddonCache.get(cacheKey)!
+  try {
+    return await pending
+  } catch (error) {
+    if (nuvioAddonCache.get(cacheKey) === pending) nuvioAddonCache.delete(cacheKey)
+    throw error
+  }
 }
 
 function metadataYear(value: any): number | null {
@@ -4622,7 +4671,8 @@ async function verifyKitsuCandidateImdb(
   addon: NuvioMetaAddon,
   catalog: NuvioSearchCatalog,
   candidate: KitsuSearchCandidate,
-  media: MediaRef
+  media: MediaRef,
+  signal?: AbortSignal
 ): Promise<boolean | null> {
   const sourceImdb = normalizedImdbContentId(media.ids.imdb)
   if (!sourceImdb) return null
@@ -4631,18 +4681,26 @@ async function verifyKitsuCandidateImdb(
       addonResourceUrl(
         addon.baseUrl,
         `meta/${encodeURIComponent(catalog.type)}/${encodeURIComponent(candidate.contentId)}.json`
-      )
+      ),
+      {
+        signal,
+        timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+        timeoutMessage: 'A Kitsu candidate metadata request did not respond before the deadline.'
+      }
     )
     const candidateImdb = metadataImdbContentId(data?.meta)
     return candidateImdb ? candidateImdb === sourceImdb : null
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason || error
     return null
   }
 }
 
 async function resolveNuvioKitsuContentId(
   connection: BridgeConnection,
-  media: MediaRef
+  media: MediaRef,
+  addons: readonly NuvioMetaAddon[],
+  signal?: AbortSignal
 ): Promise<string | null> {
   const existing = kitsuContentId(media)
   if (existing) return existing
@@ -4658,14 +4716,16 @@ async function resolveNuvioKitsuContentId(
     ].map(value => encodeURIComponent(String(value ?? ''))).join(':')
   }`
   if (!nuvioKitsuSearchCache.has(key)) {
-    nuvioKitsuSearchCache.set(key, (async () => {
+    const request = (async () => {
       const verified = new Set<string>()
       const exactYearFallback = new Set<string>()
       const unknownYearFallback = new Set<string>()
       const unqualifiedFallback = new Set<string>()
       const sourceYear = Number(media.year)
-      for (const addon of await nuvioMetadataAddons(connection)) {
+      let sawCatalogFailure = false
+      for (const addon of addons) {
         for (const catalog of addon.kitsuSearchCatalogs) {
+          if (signal?.aborted) throw signal.reason
           try {
             const { data } = await requestBridgeJson(
               addonResourceUrl(
@@ -4673,7 +4733,12 @@ async function resolveNuvioKitsuContentId(
                 `catalog/${encodeURIComponent(catalog.type)}`
                 + `/${encodeURIComponent(catalog.id)}`
                 + `/search=${encodeURIComponent(String(media.title || '').trim())}.json`
-              )
+              ),
+              {
+                signal,
+                timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+                timeoutMessage: 'A Kitsu catalog search did not respond before the deadline.'
+              }
             )
             for (const candidate of kitsuSearchCandidates(
               Array.isArray(data?.metas) ? data.metas : [],
@@ -4683,7 +4748,8 @@ async function resolveNuvioKitsuContentId(
                 addon,
                 catalog,
                 candidate,
-                media
+                media,
+                signal
               )
               if (imdbMatch === true) {
                 verified.add(candidate.contentId)
@@ -4701,7 +4767,9 @@ async function resolveNuvioKitsuContentId(
                 unknownYearFallback.add(candidate.contentId)
               }
             }
-          } catch {
+          } catch (error) {
+            if (signal?.aborted) throw signal.reason || error
+            sawCatalogFailure = true
             // Try every enabled Kitsu search catalog before declaring no match.
           }
         }
@@ -4713,10 +4781,23 @@ async function resolveNuvioKitsuContentId(
       if (unknownYearFallback.size) {
         return unknownYearFallback.size === 1 ? [...unknownYearFallback][0] : null
       }
-      return unqualifiedFallback.size === 1 ? [...unqualifiedFallback][0] : null
-    })())
+      if (unqualifiedFallback.size) {
+        return unqualifiedFallback.size === 1 ? [...unqualifiedFallback][0] : null
+      }
+      if (sawCatalogFailure) {
+        throw new Error('One or more enabled Kitsu catalogs were unavailable.')
+      }
+      return null
+    })()
+    nuvioKitsuSearchCache.set(key, request)
   }
-  return nuvioKitsuSearchCache.get(key)!
+  const pending = nuvioKitsuSearchCache.get(key)!
+  try {
+    return await pending
+  } catch (error) {
+    if (nuvioKitsuSearchCache.get(key) === pending) nuvioKitsuSearchCache.delete(key)
+    throw error
+  }
 }
 
 async function enrichNuvioKitsuAliases(
@@ -4737,14 +4818,90 @@ async function enrichNuvioKitsuAliases(
   }
   if (!groups.size) return
 
+  const deadlineController = new AbortController()
+  const deadline = setTimeout(() => {
+    const error = new Error('Optional Kitsu identity enrichment reached its overall deadline.')
+    error.name = 'TimeoutError'
+    deadlineController.abort(error)
+  }, NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS)
+
+  let addons: NuvioMetaAddon[] = []
+  try {
+    logTo(log, 'Checking enabled Nuvio add-ons for optional Kitsu identity support...')
+    addons = await nuvioMetadataAddons(connection, log, deadlineController.signal)
+  } catch (error: any) {
+    logTo(
+      log,
+      `Warning: Kitsu identity enrichment could not start (${error?.message || 'request failed'}); continuing with IMDb/TMDB identities.`
+    )
+    clearTimeout(deadline)
+    return
+  }
+
+  const kitsuAddons = addons.filter(addon => addon.kitsuSearchCatalogs.length)
+  if (!kitsuAddons.length) {
+    clearTimeout(deadline)
+    logTo(log, 'No enabled Kitsu search catalog was found; continuing with IMDb/TMDB identities.')
+    return
+  }
+
   let resolvedCount = 0
-  await mapLimit([...groups.values()], NUVIO_KITSU_SEARCH_CONCURRENCY, async group => {
+  const unresolvedGroups: MediaRef[][] = []
+  for (const group of groups.values()) {
     const existing = group.map(kitsuContentId).find(Boolean) || null
-    const contentId = existing || await resolveNuvioKitsuContentId(connection, group[0])
-    if (!contentId) return
-    for (const media of group) applyKitsuContentId(media, contentId)
-    if (!existing) resolvedCount++
+    if (existing) {
+      for (const media of group) applyKitsuContentId(media, existing)
+    } else {
+      unresolvedGroups.push(group)
+    }
+  }
+
+  if (!unresolvedGroups.length) {
+    clearTimeout(deadline)
+    return
+  }
+
+  logTo(log, `Checking ${unresolvedGroups.length} series against enabled Kitsu catalogs...`)
+  let completedCount = 0
+  let failedCount = 0
+  await mapLimit(unresolvedGroups, NUVIO_KITSU_SEARCH_CONCURRENCY, async group => {
+    if (deadlineController.signal.aborted) return
+    try {
+      const contentId = await resolveNuvioKitsuContentId(
+        connection,
+        group[0],
+        kitsuAddons,
+        deadlineController.signal
+      )
+      if (contentId) {
+        for (const media of group) applyKitsuContentId(media, contentId)
+        resolvedCount++
+      }
+    } catch {
+      if (!deadlineController.signal.aborted) failedCount++
+    } finally {
+      completedCount++
+      if (
+        completedCount === unresolvedGroups.length
+        || completedCount % NUVIO_KITSU_PROGRESS_INTERVAL === 0
+      ) {
+        logTo(log, `Kitsu identity lookup progress: ${completedCount}/${unresolvedGroups.length}.`)
+      }
+    }
   })
+  clearTimeout(deadline)
+
+  if (deadlineController.signal.aborted) {
+    logTo(
+      log,
+      `Warning: Kitsu identity lookup stopped after ${Math.round(NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS / 1_000)} seconds at ${completedCount}/${unresolvedGroups.length}; continuing with IMDb/TMDB identities.`
+    )
+  } else if (failedCount) {
+    logTo(
+      log,
+      `Warning: ${failedCount} Kitsu identity ${failedCount === 1 ? 'lookup was' : 'lookups were'} unavailable; continuing with IMDb/TMDB identities for those titles.`
+    )
+  }
   if (resolvedCount) {
     logTo(
       log,
@@ -4761,7 +4918,11 @@ async function kitsuSequelContentId(contentId: string): Promise<string | null> {
       try {
         const kitsuId = normalized.slice('kitsu:'.length)
         const { data } = await requestBridgeJson(
-          `${KITSU_API}/anime/${encodeURIComponent(kitsuId)}/media-relationships`
+          `${KITSU_API}/anime/${encodeURIComponent(kitsuId)}/media-relationships`,
+          {
+            timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+            timeoutMessage: 'Kitsu relationship metadata did not respond before the deadline.'
+          }
         )
         const sequels = new Set<string>()
         for (const relationship of Array.isArray(data?.data) ? data.data : []) {
@@ -4808,7 +4969,11 @@ async function nuvioEpisodeRefsForCandidate(
           addonResourceUrl(
             addon.baseUrl,
             `meta/${type}/${encodeURIComponent(candidate)}.json`
-          )
+          ),
+          {
+            timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+            timeoutMessage: 'A Nuvio add-on metadata request did not respond before the deadline.'
+          }
         )
         const videos = orderedStremioVideos(data?.meta)
         if (videos.length) return episodeRefs(videos)

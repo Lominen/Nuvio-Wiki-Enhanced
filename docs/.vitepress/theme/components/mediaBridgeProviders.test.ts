@@ -8,6 +8,7 @@ import {
   pullMediaBridge,
   pullMediaBridgeForVerification,
   pushMediaBridge,
+  requestBridgeJson,
   signInJellyfin,
   type BridgeConnection
 } from './mediaBridgeProviders.ts'
@@ -47,6 +48,27 @@ function simklConnection(): BridgeConnection {
     }
   }
 }
+
+test('aborts bridge requests that exceed their configured deadline', async t => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    const signal = init?.signal
+    if (!signal) throw new Error('Expected a request abort signal.')
+    return new Promise<Response>((_resolve, reject) => {
+      const rejectForAbort = () => reject(signal.reason)
+      if (signal.aborted) rejectForAbort()
+      else signal.addEventListener('abort', rejectForAbort, { once: true })
+    })
+  })
+
+  await assert.rejects(
+    requestBridgeJson('https://slow.example/data', {
+      timeoutMs: 10,
+      timeoutMessage: 'Test request deadline reached.'
+    }),
+    (error: any) => error?.name === 'TimeoutError' && error?.message === 'Test request deadline reached.'
+  )
+  assert.equal(fetchMock.mock.callCount(), 1)
+})
 
 test('accepts Simkl Pro and VIP destinations using the documented settings request', async t => {
   const fetchMock = t.mock.method(globalThis, 'fetch', async (_input, init) => {
@@ -1318,10 +1340,61 @@ test('tries later Nuvio metadata addons before skipping an episode', async t => 
   assert.equal(mappings[0].mapping.target?.videoId, 'tt0944947:1:2')
 })
 
+test('continues without Kitsu when the Nuvio add-on query is unauthorized and retries next run', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'addon-authorization-user'
+  connection.profileId = 23
+  const logs: string[] = []
+  let addonRequests = 0
+
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/api/trakt/enrich-metadata') {
+      return Response.json({
+        results: body.items.map((item: any) => ({
+          content_id: item.content_id,
+          imdbId: item._ids.imdb,
+          tmdbId: item._ids.tmdb
+        }))
+      })
+    }
+    if (url.pathname === '/rest/v1/addons') {
+      addonRequests++
+      return Response.json({ message: 'Query Authorization Failed' }, { status: 500 })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const source = createEmptyBundle()
+  source.library.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt0944947', tmdb: 1399 },
+      title: 'Game of Thrones',
+      year: 2011
+    },
+    addedAt: Date.UTC(2026, 7, 1),
+    lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
+  })
+
+  const first = await enrichMediaBridgeBundle(source, message => logs.push(message), connection)
+  const second = await enrichMediaBridgeBundle(source, message => logs.push(message), connection)
+
+  assert.equal(first.library.length, 1)
+  assert.equal(second.library.length, 1)
+  assert.equal(first.library[0].media.ids.imdb, 'tt0944947')
+  assert.equal(first.library[0].media.ids.external?.kitsu, undefined)
+  assert.equal(addonRequests, 2)
+  assert.ok(logs.some(message => /TMDB metadata batches complete: 1\/1; checking add-on identities next/.test(message)))
+  assert.ok(logs.some(message => /500 Query Authorization Failed.*continuing without optional Kitsu enrichment/.test(message)))
+})
+
 test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kitsu identity', async t => {
   const connection = nuvioConnection()
   connection.accountId = 'kitsu-anime-user'
   connection.profileId = 7
+  const logs: string[] = []
   const searchedTitles: string[] = []
   const metadataTypes: string[] = []
   let watchedItems: any[] = []
@@ -1480,12 +1553,14 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
     lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
   })
 
-  const enriched = await enrichMediaBridgeBundle(source, undefined, connection)
+  const enriched = await enrichMediaBridgeBundle(source, message => logs.push(message), connection)
   assert.equal(source.history[0].media.ids.external, undefined)
   for (const record of [...enriched.history, ...enriched.progress, ...enriched.library]) {
     assert.equal(record.media.ids.external?.kitsu, 99)
   }
   assert.deepEqual(searchedTitles, ['Dragon Ball Z'])
+  assert.ok(logs.some(message => message === 'Checking 1 series against enabled Kitsu catalogs...'))
+  assert.ok(logs.some(message => message === 'Kitsu identity lookup progress: 1/1.'))
 
   const scopes = { history: true, progress: true, library: true }
   const mappings = await inspectDestinationMappings(

@@ -3,6 +3,11 @@ export interface JsonResponse<T = any> {
   headers: Headers
 }
 
+export interface BridgeRequestInit extends RequestInit {
+  timeoutMs?: number
+  timeoutMessage?: string
+}
+
 export type AsyncLimiter = <T>(operation: () => Promise<T>) => Promise<T>
 
 export interface RetryBridgeOperationOptions {
@@ -138,30 +143,71 @@ export function errorDetail(data: any, statusText: string): string {
   return String(data || statusText || 'Request failed')
 }
 
+function requestTimeoutError(timeoutMs: number, message?: string): Error {
+  const error = new Error(message || `Request did not respond within ${timeoutMs}ms.`)
+  error.name = 'TimeoutError'
+  return error
+}
+
 export async function requestBridgeJson<T = any>(
   url: string,
-  options: RequestInit = {}
+  options: BridgeRequestInit = {}
 ): Promise<JsonResponse<T>> {
-  const response = await fetch(url, options)
-  const text = await response.text()
-  let data: any = null
-  if (text) {
-    try {
-      data = JSON.parse(text)
-    } catch {
-      data = text
-    }
+  const {
+    timeoutMs: requestedTimeoutMs,
+    timeoutMessage,
+    signal: callerSignal,
+    ...fetchOptions
+  } = options
+  const timeoutMs = Number(requestedTimeoutMs)
+  const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0
+  const timeoutController = hasTimeout ? new AbortController() : null
+  const relayCallerAbort = () => timeoutController?.abort(
+    callerSignal?.reason || new DOMException('The operation was aborted.', 'AbortError')
+  )
+  let timeout: ReturnType<typeof setTimeout> | undefined
+
+  if (timeoutController) {
+    if (callerSignal?.aborted) relayCallerAbort()
+    else callerSignal?.addEventListener('abort', relayCallerAbort, { once: true })
+    timeout = setTimeout(() => {
+      timeoutController.abort(requestTimeoutError(timeoutMs, timeoutMessage))
+    }, timeoutMs)
   }
-  if (!response.ok) {
-    const error = new Error(`${response.status} ${errorDetail(data, response.statusText)}`) as Error & {
-      status?: number
-      body?: any
-      headers?: Headers
+
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: timeoutController?.signal || callerSignal
+    })
+    const text = await response.text()
+    let data: any = null
+    if (text) {
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = text
+      }
     }
-    error.status = response.status
-    error.body = data
-    error.headers = response.headers
+    if (!response.ok) {
+      const error = new Error(`${response.status} ${errorDetail(data, response.statusText)}`) as Error & {
+        status?: number
+        body?: any
+        headers?: Headers
+      }
+      error.status = response.status
+      error.body = data
+      error.headers = response.headers
+      throw error
+    }
+    return { data: data as T, headers: response.headers }
+  } catch (error) {
+    if (timeoutController?.signal.aborted && timeoutController.signal.reason) {
+      throw timeoutController.signal.reason
+    }
     throw error
+  } finally {
+    if (timeout) clearTimeout(timeout)
+    callerSignal?.removeEventListener('abort', relayCallerAbort)
   }
-  return { data: data as T, headers: response.headers }
 }
