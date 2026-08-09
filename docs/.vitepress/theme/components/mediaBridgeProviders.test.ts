@@ -856,22 +856,6 @@ test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment',
       deletedWatchedKeys = body.p_keys
       return Response.json(null)
     }
-    if (url.pathname === '/rest/v1/rpc/sync_pull_library') {
-      return Response.json([
-        {
-          content_id: 'tt2015381',
-          content_type: 'movie',
-          name: 'Guardians of the Galaxy',
-          added_at: Date.UTC(2026, 6, 15)
-        },
-        {
-          content_id: 'tmdb:118340',
-          content_type: 'movie',
-          name: 'Guardians of the Galaxy',
-          added_at: Date.UTC(2026, 6, 14)
-        }
-      ])
-    }
     if (url.pathname === '/api/trakt/enrich-metadata') {
       metadataItems = body.items
       return Response.json({
@@ -889,10 +873,11 @@ test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment',
         }))
       })
     }
-    if (url.pathname === '/rest/v1/rpc/sync_push_library') {
+    if (url.pathname === '/rest/v1/rpc/sync_push_library_items') {
       libraryItems = body.p_items
       return Response.json(null)
     }
+    if (url.pathname === '/rest/v1/rpc/sync_delete_library_items') return Response.json(null)
     throw new Error(`Unexpected request: ${url.pathname}`)
   })
 
@@ -991,7 +976,65 @@ test('converts percentage-only progress to Nuvio elapsed time using metadata run
   assert.equal(progressEntries.length, 1)
   assert.equal(progressEntries[0].position, 3_600_000)
   assert.equal(progressEntries[0].duration, 7_200_000)
+  assert.equal(progressEntries[0].progress_key, 'tt2015381')
   assert.equal(result.written.progress, 1)
+  assert.deepEqual(result.issues, [])
+})
+
+test('writes Nuvio series-level watched state and stable episode progress keys', async t => {
+  let watchedItems: any[] = []
+  let progressEntries: any[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/rest/v1/rpc/sync_push_watched_items') {
+      watchedItems = body.p_items
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_push_watch_progress') {
+      progressEntries = body.p_entries
+      return Response.json(null)
+    }
+    throw new Error(`Unexpected request: ${url.pathname}`)
+  })
+
+  const bundle = createEmptyBundle()
+  bundle.history.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt0944947' },
+      title: 'Game of Thrones'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  bundle.progress.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt0944947' },
+      title: 'Game of Thrones',
+      season: 2,
+      episode: 3,
+      videoId: 'tt0944947:2:3'
+    },
+    positionMs: 600_000,
+    durationMs: 3_600_000,
+    updatedAt: Date.UTC(2026, 6, 18)
+  })
+
+  const result = await pushMediaBridge({
+    connection: nuvioConnection(),
+    bundle,
+    scopes: { history: true, progress: true, library: false }
+  })
+
+  assert.equal(watchedItems.length, 1)
+  assert.equal(watchedItems[0].content_id, 'tt0944947')
+  assert.equal(Object.hasOwn(watchedItems[0], 'season'), false)
+  assert.equal(Object.hasOwn(watchedItems[0], 'episode'), false)
+  assert.equal(progressEntries.length, 1)
+  assert.equal(progressEntries[0].progress_key, 'tt0944947_s2e3')
+  assert.deepEqual(result.written, { history: 1, progress: 1, library: 0 })
   assert.deepEqual(result.issues, [])
 })
 
@@ -1607,13 +1650,11 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
       progressEntries = body.p_entries
       return Response.json(null)
     }
-    if (url.pathname === '/rest/v1/rpc/sync_pull_library') {
-      return Response.json([])
-    }
-    if (url.pathname === '/rest/v1/rpc/sync_push_library') {
+    if (url.pathname === '/rest/v1/rpc/sync_push_library_items') {
       libraryItems = body.p_items
       return Response.json(null)
     }
+    if (url.pathname === '/rest/v1/rpc/sync_delete_library_items') return Response.json(null)
     throw new Error(`Unexpected request: ${url}`)
   })
 
@@ -1710,6 +1751,7 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
   assert.equal(watchedItems[0].episode, 40)
   assert.equal(progressEntries[0].content_id, 'kitsu:99')
   assert.equal(progressEntries[0].video_id, 'kitsu:99:1:40')
+  assert.equal(progressEntries[0].progress_key, 'kitsu:99_s1e40')
   assert.equal(libraryItems[0].content_id, 'kitsu:99')
   assert.deepEqual(result.written, { history: 1, progress: 1, library: 1 })
   assert.deepEqual(result.issues, [])
@@ -2750,12 +2792,9 @@ test('maps series episodes to Plex rating keys before marking them watched', asy
   assert.deepEqual(result.issues, [])
 })
 
-test('imports Simkl resume points sequentially through pause within one 30-second budget', async t => {
-  let timeoutMs = 0
-  const timeoutController = new AbortController()
-  const timeoutMock = t.mock.method(AbortSignal, 'timeout', (ms: number) => {
-    timeoutMs = ms
-    return timeoutController.signal
+test('imports Simkl resume points sequentially without a shared 30-second cutoff', async t => {
+  const timeoutMock = t.mock.method(AbortSignal, 'timeout', () => {
+    throw new Error('Simkl progress must not create a shared AbortSignal timeout.')
   })
   const requests: Array<{ url: string; body: any }> = []
   let activeRequests = 0
@@ -2797,8 +2836,7 @@ test('imports Simkl resume points sequentially through pause within one 30-secon
     log: message => logs.push(message)
   })
 
-  assert.equal(timeoutMock.mock.callCount(), 1)
-  assert.equal(timeoutMs, 30_000)
+  assert.equal(timeoutMock.mock.callCount(), 0)
   assert.equal(fetchMock.mock.callCount(), 2)
   assert.equal(maximumActiveRequests, 1)
   assert.deepEqual(requests.map(request => new URL(request.url).pathname), [
@@ -2827,12 +2865,21 @@ test('imports Simkl resume points sequentially through pause within one 30-secon
   assert.deepEqual(logs, ['Updated 2 Simkl resume points.'])
 })
 
-test('stops the Simkl progress phase and skips the remainder when its budget expires', async t => {
-  const timeoutController = new AbortController()
-  t.mock.method(AbortSignal, 'timeout', () => timeoutController.signal)
+test('continues Simkl progress after an individual resume point is rejected', async t => {
+  let requestCount = 0
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => {
-    timeoutController.abort(new DOMException('The operation timed out.', 'TimeoutError'))
-    throw timeoutController.signal.reason
+    requestCount++
+    if (requestCount === 1) {
+      return new Response(JSON.stringify({ message: 'Invalid progress record.' }), {
+        status: 422,
+        statusText: 'Unprocessable Content',
+        headers: { 'Content-Type': 'application/json' }
+      })
+    }
+    return new Response(JSON.stringify({ action: 'pause' }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' }
+    })
   })
   const bundle = createEmptyBundle()
   bundle.progress.push(
@@ -2846,12 +2893,13 @@ test('stops the Simkl progress phase and skips the remainder when its budget exp
     scopes: { history: false, progress: true, library: false }
   })
 
-  assert.equal(fetchMock.mock.callCount(), 1)
-  assert.equal(result.written.progress, 0)
-  assert.equal(result.skipped?.progress, 2)
+  assert.equal(fetchMock.mock.callCount(), 2)
+  assert.equal(result.written.progress, 1)
+  assert.equal(result.skipped?.progress, 1)
   assert.equal(result.issues.length, 1)
-  assert.equal(result.issues[0].status, 'note')
-  assert.match(result.issues[0].reason, /stopped after 30 seconds; 2 resume points were skipped/)
+  assert.equal(result.issues[0].status, 'unresolved')
+  assert.equal(result.issues[0].media?.ids.imdb, 'tt2015381')
+  assert.match(result.issues[0].reason, /Invalid progress record/)
 })
 
 test('converts percentage-only progress to Stremio elapsed time using metadata runtime', async t => {
@@ -3071,6 +3119,257 @@ test('keeps an existing Stremio TMDB key instead of creating an IMDb duplicate',
   assert.equal(changes.some(item => item._id === 'tt2015381'), false)
 })
 
+test('writes native Kitsu anime as flat Simkl history and anime playback', async t => {
+  const requests: Array<{ path: string; body: any }> = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const path = new URL(String(input)).pathname
+    requests.push({ path, body: JSON.parse(String(init?.body || '{}')) })
+    if (path === '/sync/history') return Response.json({})
+    if (path === '/scrobble/pause') {
+      return new Response(JSON.stringify({ action: 'pause' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    }
+    throw new Error(`Unexpected Simkl request: ${path}`)
+  })
+
+  const animeMedia = {
+    kind: 'series' as const,
+    ids: {
+      imdb: 'tt0214341',
+      simkl: 123456,
+      external: { kitsu: 99, mal: 813 }
+    },
+    title: 'Dragon Ball Z',
+    year: 1989,
+    season: 1,
+    episode: 40,
+    absoluteEpisode: 40,
+    videoId: 'kitsu:99:40'
+  }
+  const bundle = createEmptyBundle()
+  bundle.history.push({
+    media: { ...animeMedia, ids: { ...animeMedia.ids } },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  bundle.progress.push({
+    media: { ...animeMedia, ids: { ...animeMedia.ids } },
+    percentage: 37.5,
+    updatedAt: Date.UTC(2026, 6, 18)
+  })
+
+  const result = await pushMediaBridge({
+    connection: simklConnection(),
+    bundle,
+    scopes: { history: true, progress: true, library: false }
+  })
+
+  const historyBody = requests.find(request => request.path === '/sync/history')?.body
+  assert.equal(historyBody.shows.length, 1)
+  assert.deepEqual(historyBody.shows[0].ids, { kitsu: 99 })
+  assert.equal(historyBody.shows[0].seasons, undefined)
+  assert.deepEqual(historyBody.shows[0].episodes, [{
+    number: 40,
+    watched_at: '2026-07-17T00:00:00.000Z'
+  }])
+
+  const progressBody = requests.find(request => request.path === '/scrobble/pause')?.body
+  assert.deepEqual(progressBody.anime.ids, { kitsu: 99 })
+  assert.equal(progressBody.show, undefined)
+  assert.deepEqual(progressBody.episode, { number: 40 })
+  assert.equal(progressBody.progress, 37.5)
+  assert.equal(result.written.history, 1)
+  assert.equal(result.written.progress, 1)
+  assert.deepEqual(result.issues, [])
+})
+
+test('writes TV-style anime with parent IDs and Simkl TVDB season mapping enabled', async t => {
+  let requestBody: any = null
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body || '{}'))
+    return Response.json({})
+  })
+  const bundle = createEmptyBundle()
+  bundle.history.push({
+    media: {
+      kind: 'series',
+      ids: {
+        imdb: 'tt0214341',
+        tvdb: 81472,
+        simkl: 123456,
+        external: { kitsu: 99, mal: 813, anilist: 813 }
+      },
+      title: 'Dragon Ball Z',
+      year: 1989,
+      season: 2,
+      episode: 3,
+      videoId: 'tt0214341:2:3'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+
+  const result = await pushMediaBridge({
+    connection: simklConnection(),
+    bundle,
+    scopes: { history: true, progress: false, library: false }
+  })
+
+  assert.equal(requestBody.shows.length, 1)
+  assert.deepEqual(requestBody.shows[0].ids, { imdb: 'tt0214341', tvdb: 81472 })
+  assert.equal(requestBody.shows[0].use_tvdb_anime_seasons, true)
+  assert.deepEqual(requestBody.shows[0].seasons, [{
+    number: 2,
+    episodes: [{ number: 3, watched_at: '2026-07-17T00:00:00.000Z' }]
+  }])
+  assert.equal(result.written.history, 1)
+  assert.deepEqual(result.issues, [])
+})
+
+test('writes a series-level completed marker to Simkl without inventing an episode', async t => {
+  let requestBody: any = null
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body || '{}'))
+    return Response.json({})
+  })
+  const bundle = createEmptyBundle()
+  bundle.history.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt0944947' },
+      title: 'Game of Thrones',
+      year: 2011
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+
+  const result = await pushMediaBridge({
+    connection: simklConnection(),
+    bundle,
+    scopes: { history: true, progress: false, library: false }
+  })
+
+  assert.equal(requestBody.shows.length, 1)
+  assert.deepEqual(requestBody.shows[0], {
+    title: 'Game of Thrones',
+    year: 2011,
+    ids: { imdb: 'tt0944947' },
+    watched_at: '2026-07-17T00:00:00.000Z',
+    status: 'completed'
+  })
+  assert.equal(result.written.history, 1)
+  assert.deepEqual(result.issues, [])
+})
+
+test('uses title and year when Simkl writes have no supported IDs', async t => {
+  const requests: Array<{ path: string; body: any }> = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const path = new URL(String(input)).pathname
+    requests.push({ path, body: JSON.parse(String(init?.body || '{}')) })
+    if (path === '/scrobble/pause') {
+      return new Response(JSON.stringify({ action: 'pause' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    }
+    return Response.json({})
+  })
+  const bundle = createEmptyBundle()
+  bundle.history.push({
+    media: { kind: 'movie', ids: {}, title: 'Title-only History', year: 2022 },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  bundle.library.push({
+    media: { kind: 'series', ids: {}, title: 'Title-only Library', year: 2023 },
+    addedAt: Date.UTC(2026, 6, 17),
+    lists: [{ service: 'nuvio', kind: 'library' }]
+  })
+  bundle.progress.push({
+    media: { kind: 'movie', ids: {}, title: 'Title-only Progress', year: 2024 },
+    percentage: 25,
+    updatedAt: Date.UTC(2026, 6, 17)
+  })
+
+  const result = await pushMediaBridge({
+    connection: simklConnection(),
+    bundle,
+    scopes: { history: true, progress: true, library: true }
+  })
+
+  const historyMovie = requests.find(request => request.path === '/sync/history')?.body.movies[0]
+  assert.deepEqual(historyMovie, {
+    title: 'Title-only History',
+    year: 2022,
+    watched_at: '2026-07-17T00:00:00.000Z'
+  })
+  const libraryShow = requests.find(request => request.path === '/sync/add-to-list')?.body.shows[0]
+  assert.deepEqual(libraryShow, {
+    title: 'Title-only Library',
+    year: 2023,
+    to: 'plantowatch'
+  })
+  const progressMovie = requests.find(request => request.path === '/scrobble/pause')?.body.movie
+  assert.deepEqual(progressMovie, { title: 'Title-only Progress', year: 2024 })
+  assert.deepEqual(result.written, { history: 1, progress: 1, library: 1 })
+  assert.deepEqual(result.issues, [])
+})
+
+test('does not overwrite Simkl history status with an overlapping Plan to Watch write', async t => {
+  const requestedPaths: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input))
+    requestedPaths.push(url.pathname)
+    if (url.pathname !== '/sync/history') {
+      throw new Error(`Unexpected Simkl status overwrite request: ${url.pathname}`)
+    }
+    const body = JSON.parse(String(init?.body || '{}'))
+    return Response.json({
+      added: {
+        movies: 1,
+        shows: 0,
+        episodes: 0,
+        statuses: [{
+          request: body.movies[0],
+          response: { status: 'completed', simkl_type: 'movie', anime_type: null }
+        }]
+      },
+      not_found: { movies: [], shows: [], episodes: [] }
+    })
+  })
+  const bundle = createEmptyBundle()
+  const media = {
+    kind: 'movie' as const,
+    ids: { imdb: 'tt7654401' },
+    title: 'History Wins',
+    year: 2024
+  }
+  bundle.history.push({
+    media: { ...media, ids: { ...media.ids } },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  bundle.library.push({
+    media: { ...media, ids: { ...media.ids } },
+    addedAt: Date.UTC(2026, 6, 16),
+    lists: [{ service: 'nuvio', kind: 'library' }]
+  })
+
+  const result = await pushMediaBridge({
+    connection: simklConnection(),
+    bundle,
+    scopes: { history: true, progress: false, library: true }
+  })
+
+  assert.deepEqual(requestedPaths, ['/sync/history'])
+  assert.deepEqual(result.written, { history: 1, progress: 0, library: 1 })
+  assert.deepEqual(result.confirmedScopes, ['history', 'library'])
+  assert.deepEqual(result.issues, [])
+})
+
 test('collapses replay events for Simkl watched state and confirms an accepted no-op', async t => {
   let requestBody: any = null
   const fetchMock = t.mock.method(globalThis, 'fetch', async (input, init) => {
@@ -3110,7 +3409,7 @@ test('collapses replay events for Simkl watched state and confirms an accepted n
   assert.equal(fetchMock.mock.callCount(), 1)
   assert.equal(requestBody.movies.length, 1)
   assert.equal(requestBody.movies[0].watched_at, '2026-07-17T00:00:00.000Z')
-  assert.equal(requestBody.movies[0].ids.traktslug, undefined)
+  assert.equal(requestBody.movies[0].ids.traktslug, 'provider-generated-slug')
   assert.equal(result.written.history, 1)
   assert.equal(result.skipped?.history, undefined)
   assert.deepEqual(result.confirmedScopes, ['history'])
@@ -3166,17 +3465,20 @@ test('checks Simkl activities and merges only the changed destination delta for 
     if (url.pathname === '/sync/activities') {
       return Response.json({ all: '2026-07-17T12:00:00Z' })
     }
-    assert.equal(url.pathname, '/sync/all-items')
+    assert.ok([
+      '/sync/all-items/movies',
+      '/sync/all-items/shows',
+      '/sync/all-items/anime'
+    ].includes(url.pathname))
     assert.equal(url.searchParams.get('date_from'), '2026-07-17T11:00:00Z')
-    return Response.json({
-      movies: [{
+    assert.equal(url.searchParams.get('extended'), 'full_anime_seasons')
+    return url.pathname.endsWith('/movies')
+      ? Response.json([{
         movie: { title: 'Changed', year: 2024, ids: { imdb: 'tt2015382' } },
         status: 'completed',
         last_watched_at: '2026-07-17T11:30:00Z'
-      }],
-      shows: [],
-      anime: []
-    })
+      }])
+      : Response.json([])
   })
   const baseline = createEmptyBundle()
   baseline.history.push(movieHistory('Existing', 'tt2015381', Date.UTC(2026, 6, 16)))
@@ -3188,10 +3490,10 @@ test('checks Simkl activities and merges only the changed destination delta for 
     scopes: { history: true, progress: false, library: false }
   })
 
-  assert.equal(fetchMock.mock.callCount(), 2)
+  assert.equal(fetchMock.mock.callCount(), 4)
   assert.equal(result.bundle.history.length, 2)
   assert.deepEqual(result.bundle.history.map(record => record.media.title).sort(), ['Changed', 'Existing'])
-  assert.match(requests[1], /date_from=2026-07-17T11%3A00%3A00Z/)
+  assert.ok(requests.slice(1).every(request => /date_from=2026-07-17T11%3A00%3A00Z/.test(request)))
 })
 
 test('skips the Simkl destination reread when activities did not change', async t => {
@@ -3213,17 +3515,36 @@ test('skips the Simkl destination reread when activities did not change', async 
   assert.equal(result.bundle.history.length, 1)
 })
 
-test('reads all selected Simkl scopes concurrently', async t => {
+test('serializes Simkl reads and imports the full TVDB episode projection', async t => {
   let activeRequests = 0
   let maximumActiveRequests = 0
-  const requestedPaths: string[] = []
+  const requestedUrls: URL[] = []
   const fetchMock = t.mock.method(globalThis, 'fetch', async input => {
     const url = new URL(String(input))
-    requestedPaths.push(url.pathname)
+    requestedUrls.push(url)
     activeRequests++
     maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests)
     await new Promise(resolve => setTimeout(resolve, 10))
     activeRequests--
+    if (url.pathname === '/sync/all-items/shows') {
+      return Response.json([{
+        show: {
+          title: 'Mapped Show',
+          year: 2024,
+          ids: { imdb: 'tt7654321', tvdb: 12345 }
+        },
+        status: 'watching',
+        seasons: [{
+          number: 1,
+          episodes: [{
+            number: 26,
+            watched: true,
+            watched_at: '2026-07-17T12:00:00Z',
+            tvdb: { season: 2, episode: 3 }
+          }]
+        }]
+      }])
+    }
     return Response.json([])
   })
   const connection = simklConnection()
@@ -3235,14 +3556,210 @@ test('reads all selected Simkl scopes concurrently', async t => {
   })
 
   assert.equal(fetchMock.mock.callCount(), 4)
-  assert.equal(maximumActiveRequests, 4)
-  assert.deepEqual(new Set(requestedPaths), new Set([
+  assert.equal(maximumActiveRequests, 1)
+  assert.deepEqual(new Set(requestedUrls.map(url => url.pathname)), new Set([
     '/sync/all-items/movies',
     '/sync/all-items/shows',
     '/sync/all-items/anime',
     '/sync/playback'
   ]))
-  assert.deepEqual(result.bundle, createEmptyBundle())
+  for (const url of requestedUrls.filter(url => url.pathname.startsWith('/sync/all-items/'))) {
+    assert.equal(url.searchParams.get('extended'), 'full_anime_seasons')
+    assert.equal(url.searchParams.get('episode_watched_at'), 'yes')
+    assert.equal(url.searchParams.get('episode_tvdb_id'), 'yes')
+    assert.equal(url.searchParams.get('include_all_episodes'), 'yes')
+    assert.equal(url.searchParams.get('language'), 'en')
+  }
+  assert.equal(result.bundle.history.length, 1)
+  assert.equal(result.bundle.history[0].media.season, 2)
+  assert.equal(result.bundle.history[0].media.episode, 3)
+  assert.equal(result.bundle.history[0].media.absoluteEpisode, 26)
+  assert.equal(result.bundle.library.length, 1)
+})
+
+test('maps Nuvio TVDB coordinates through the cached Simkl native anime catalog', async t => {
+  const destination = simklConnection()
+  destination.accountId = 'simkl-native-target-cache'
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input))
+    if (url.pathname === '/sync/all-items/movies') return Response.json([])
+    if (url.pathname === '/sync/all-items/shows') {
+      return Response.json([{
+        show: {
+          title: 'Mapped Anime',
+          year: 2024,
+          ids: { imdb: 'tt7654399', tvdb: 7654399 }
+        },
+        status: 'watching',
+        seasons: []
+      }])
+    }
+    if (url.pathname === '/sync/all-items/anime') {
+      return Response.json([{
+        anime: {
+          title: 'Mapped Anime',
+          year: 2024,
+          ids: { imdb: 'tt7654399', tvdb: 7654399, kitsu: 99001 }
+        },
+        status: 'watching',
+        seasons: [{
+          number: 1,
+          episodes: [{
+            number: 26,
+            title: 'Native episode 26',
+            tvdb: { season: 2, episode: 3 }
+          }]
+        }]
+      }])
+    }
+    throw new Error(`Unexpected Simkl request: ${url}`)
+  })
+
+  const pulled = await pullMediaBridge({
+    connection: destination,
+    scopes: { history: true, progress: false, library: true }
+  })
+  assert.equal(pulled.bundle.library[0].media.ids.external?.kitsu, 99001)
+  const source = createEmptyBundle()
+  source.history.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt7654399', tvdb: 7654399 },
+      title: 'Mapped Anime',
+      year: 2024,
+      season: 2,
+      episode: 3,
+      absoluteEpisode: 26,
+      videoId: 'tt7654399:2:3'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+
+  const mappings = await inspectDestinationMappings(
+    destination,
+    source,
+    { history: true, progress: false, library: false }
+  )
+
+  assert.equal(mappings.length, 1)
+  assert.equal(mappings[0].mapping.status, 'mapped')
+  assert.equal(mappings[0].mapping.target?.season, 2)
+  assert.equal(mappings[0].mapping.target?.episode, 3)
+  assert.equal(mappings[0].mapping.target?.absoluteEpisode, 26)
+  assert.equal(mappings[0].mapping.target?.title, 'Native episode 26')
+  assert.equal(mappings[0].mapping.target?.videoId, 'tt7654399:2:3')
+  assert.equal(mappings[0].mapping.target?.contentId, undefined)
+
+  const nativeSource = createEmptyBundle()
+  nativeSource.history.push({
+    media: {
+      ...source.history[0].media,
+      ids: {
+        ...source.history[0].media.ids,
+        external: { kitsu: 99001 }
+      },
+      videoId: 'kitsu:99001:26'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  const nativeMappings = await inspectDestinationMappings(
+    destination,
+    nativeSource,
+    { history: true, progress: false, library: false }
+  )
+  assert.equal(nativeMappings[0].mapping.status, 'mapped')
+  assert.equal(nativeMappings[0].mapping.target?.videoId, 'kitsu:99001:26')
+  assert.equal(nativeMappings[0].mapping.target?.contentId, 'kitsu:99001')
+})
+
+test('uses the cached Simkl source sequence when mapping split anime to Nuvio', async t => {
+  const sourceConnection = simklConnection()
+  sourceConnection.slot = 'source'
+  sourceConnection.accountId = 'simkl-native-source-cache'
+  const destination = nuvioConnection()
+  destination.accountId = 'simkl-to-nuvio-sequence-user'
+  destination.profileId = 44
+
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    if (url.hostname === 'api.simkl.com') {
+      if (url.pathname === '/sync/all-items/movies' || url.pathname === '/sync/all-items/shows') {
+        return Response.json([])
+      }
+      if (url.pathname === '/sync/all-items/anime') {
+        return Response.json([{
+          anime: {
+            title: 'Sequence Anime',
+            year: 2024,
+            ids: { imdb: 'tt7654400', kitsu: 99002 }
+          },
+          status: 'watching',
+          seasons: [{
+            number: 1,
+            episodes: Array.from({ length: 3 }, (_, index) => ({
+              number: 26 + index,
+              title: `Simkl source episode ${26 + index}`,
+              tvdb: { season: 2, episode: index + 1 },
+              ...(index === 2 ? { watched_at: '2026-07-17T12:00:00Z' } : {})
+            }))
+          }]
+        }])
+      }
+    }
+    if (url.pathname === '/rest/v1/addons') {
+      return Response.json([{
+        url: 'https://simkl-sequence-meta.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 44
+      }])
+    }
+    if (url.hostname === 'simkl-sequence-meta.test' && url.pathname === '/manifest.json') {
+      return Response.json({
+        id: 'community.simkl.sequence',
+        resources: ['meta'],
+        types: ['anime'],
+        idPrefixes: ['kitsu']
+      })
+    }
+    if (url.hostname === 'simkl-sequence-meta.test' && url.pathname.startsWith('/meta/')) {
+      const contentId = decodeURIComponent(url.pathname.split('/').at(-1)!.replace(/\.json$/, ''))
+      if (contentId !== 'kitsu:99002') return new Response(null, { status: 404 })
+      return Response.json({
+        meta: {
+          id: contentId,
+          videos: Array.from({ length: 3 }, (_, index) => ({
+            id: `${contentId}:1:${index + 1}`,
+            season: 1,
+            episode: index + 1,
+            title: `Nuvio destination episode ${index + 1}`
+          }))
+        }
+      })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const pulled = await pullMediaBridge({
+    connection: sourceConnection,
+    scopes: { history: true, progress: false, library: false }
+  })
+  assert.equal(pulled.bundle.history.length, 1)
+  const mappings = await inspectDestinationMappings(
+    destination,
+    pulled.bundle,
+    { history: true, progress: false, library: false },
+    undefined,
+    sourceConnection
+  )
+
+  assert.equal(mappings.length, 1)
+  assert.equal(mappings[0].mapping.status, 'mapped')
+  assert.equal(mappings[0].mapping.evidence?.sequenceStrategy, 'same-index')
+  assert.equal(mappings[0].mapping.target?.videoId, 'kitsu:99002:1:3')
+  assert.equal(mappings[0].mapping.target?.contentId, 'kitsu:99002')
 })
 
 test('refreshes Nuvio once while reading selected scopes concurrently', async t => {
@@ -3292,7 +3809,7 @@ test('refreshes Nuvio once while reading selected scopes concurrently', async t 
   assert.deepEqual(result.bundle, createEmptyBundle())
 })
 
-test('rejects invalid Nuvio watched markers and parses compact watched timestamps', async t => {
+test('accepts Nuvio series-level watched markers and parses compact watched timestamps', async t => {
   const logs: string[] = []
   const fetchMock = t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input))
@@ -3312,6 +3829,14 @@ test('rejects invalid Nuvio watched markers and parses compact watched timestamp
         season: null,
         episode: null,
         watched_at: '2026-07-17T12:00:00Z'
+      },
+      {
+        content_id: 'custom:zero-marker',
+        content_type: 'series',
+        title: 'Series marker without an exact Simkl timestamp',
+        season: null,
+        episode: null,
+        watched_at: 0
       },
       {
         content_id: 'custom:valid-movie',
@@ -3337,7 +3862,7 @@ test('rejects invalid Nuvio watched markers and parses compact watched timestamp
   })
 
   assert.equal(fetchMock.mock.callCount(), 1)
-  assert.equal(result.bundle.history.length, 2)
+  assert.equal(result.bundle.history.length, 4)
   assert.equal(
     result.bundle.history.find(record => record.media.title === 'Valid movie')?.watchedAt,
     Date.UTC(2026, 6, 17, 12)
@@ -3346,10 +3871,18 @@ test('rejects invalid Nuvio watched markers and parses compact watched timestamp
     result.bundle.history.find(record => record.media.title === 'Valid series')?.media.episode,
     2
   )
-  assert.equal(result.issues.length, 2)
+  const seriesMarker = result.bundle.history.find(record => record.media.title === 'Series-level marker')
+  assert.equal(seriesMarker?.media.kind, 'series')
+  assert.equal(seriesMarker?.media.season, undefined)
+  assert.equal(seriesMarker?.media.episode, undefined)
+  assert.equal(
+    result.bundle.history.find(record => record.media.title === 'Series marker without an exact Simkl timestamp')?.watchedAt,
+    0
+  )
+  assert.equal(result.issues.length, 1)
   assert.ok(result.issues.every(issue => issue.code === 'source_record_invalid'))
   assert.ok(result.issues.every(issue => issue.status === 'unresolved'))
-  assert.ok(logs.includes('Ignored 2 invalid Nuvio watched records.'))
+  assert.ok(logs.includes('Ignored 1 invalid Nuvio watched record.'))
 })
 
 test('bounds concurrent Nuvio write batches across history and progress', async t => {

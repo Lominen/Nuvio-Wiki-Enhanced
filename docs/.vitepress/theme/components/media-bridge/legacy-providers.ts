@@ -58,7 +58,9 @@ const TRAKT_READ_CONCURRENCY = 6
 const TRAKT_PAGE_CONCURRENCY = 4
 const PROVIDER_READ_REQUEST_TIMEOUT_MS = 30_000
 const PROVIDER_WRITE_REQUEST_TIMEOUT_MS = 60_000
-const SIMKL_PROGRESS_IMPORT_TIMEOUT_MS = 30_000
+const NUVIO_WATCHED_PAGE_SIZE = 900
+const NUVIO_LIBRARY_PAGE_SIZE = 500
+const NUVIO_LIBRARY_MUTATION_BATCH_SIZE = 500
 const NUVIO_METADATA_BATCH_SIZE = 400
 const NUVIO_METADATA_BATCH_CONCURRENCY = 4
 const NUVIO_METADATA_REQUEST_TIMEOUT_MS = 120_000
@@ -87,6 +89,8 @@ const SIMKL_EXTERNAL_ID_NAMESPACES = [
   'letterboxd',
   'hulu'
 ] as const
+
+const SIMKL_ANIME_ID_NAMESPACES = ['mal', 'anidb', 'anilist', 'kitsu'] as const
 
 const STANDARD_MEDIA_ID_KEYS = new Set([
   'imdb', 'imdb_id',
@@ -275,9 +279,16 @@ export interface PushOptions extends PullOptions {
 
 const traktTokenRefreshes = new WeakMap<object, Promise<string>>()
 const nuvioTokenRefreshes = new WeakMap<object, Promise<string>>()
+const NUVIO_ORIGIN_CLIENT_ID_STORAGE_KEY = 'nuvio-sync-origin-client-id'
+let cachedNuvioOriginClientId = ''
 
 const traktReadLimiters = new WeakMap<object, AsyncLimiter>()
 const nuvioWriteLimiters = new WeakMap<object, AsyncLimiter>()
+const simklRequestLimiters = new WeakMap<object, AsyncLimiter>()
+const simklLastGetCompletion = new WeakMap<object, number>()
+const simklLastWriteCompletion = new WeakMap<object, number>()
+const simklMediaSnapshotCaches = new Map<string, Map<string, MediaRef>>()
+const simklEpisodeCatalogCaches = new Map<string, Map<string, EpisodeRef[]>>()
 
 function traktReadLimiter(credentials: object): AsyncLimiter {
   let limiter = traktReadLimiters.get(credentials)
@@ -295,6 +306,61 @@ function nuvioWriteLimiter(credentials: object): AsyncLimiter {
     nuvioWriteLimiters.set(credentials, limiter)
   }
   return limiter
+}
+
+function createNuvioOriginClientId(): string {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = new Uint8Array(32)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index++) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  return `nuvio-tv-${[...bytes].map(value => alphabet[value % alphabet.length]).join('')}`
+}
+
+function nuvioOriginClientId(): string {
+  if (cachedNuvioOriginClientId) return cachedNuvioOriginClientId
+  try {
+    const stored = globalThis.localStorage?.getItem(NUVIO_ORIGIN_CLIENT_ID_STORAGE_KEY) || ''
+    if (/^nuvio-tv-[a-z0-9]{32}$/.test(stored)) {
+      cachedNuvioOriginClientId = stored
+      return stored
+    }
+  } catch {
+    // Storage can be unavailable in private or server-rendered contexts.
+  }
+  cachedNuvioOriginClientId = createNuvioOriginClientId()
+  try {
+    globalThis.localStorage?.setItem(NUVIO_ORIGIN_CLIENT_ID_STORAGE_KEY, cachedNuvioOriginClientId)
+  } catch {
+    // The module-level value remains stable for this browser session.
+  }
+  return cachedNuvioOriginClientId
+}
+
+function simklRequestLimiter(credentials: object): AsyncLimiter {
+  let limiter = simklRequestLimiters.get(credentials)
+  if (!limiter) {
+    // Simkl permits one uncached request at a time for a user token.
+    limiter = createAsyncLimiter(1)
+    simklRequestLimiters.set(credentials, limiter)
+  }
+  return limiter
+}
+
+async function waitForSimklRequestSlot(credentials: object, isWrite: boolean): Promise<void> {
+  const completions = isWrite ? simklLastWriteCompletion : simklLastGetCompletion
+  const minimumGapMs = isWrite ? 1_000 : 100
+  const waitMs = Math.max(0, (completions.get(credentials) || 0) + minimumGapMs - Date.now())
+  if (waitMs) await sleep(waitMs)
+}
+
+function recordSimklRequestCompletion(credentials: object, isWrite: boolean): void {
+  const completions = isWrite ? simklLastWriteCompletion : simklLastGetCompletion
+  completions.set(credentials, Date.now())
 }
 
 function logTo(log: BridgeLog | undefined, message: string) {
@@ -568,7 +634,10 @@ function traktEpisodeWriteIds(videoId: unknown): Record<string, number> | null {
   return { [match[1]]: id }
 }
 
-function simklWriteIds(media: MediaRef): Record<string, string | number> | null {
+function simklWriteIds(
+  media: MediaRef,
+  options: { stripAnimeEntryIds?: boolean } = {}
+): Record<string, string | number> | null {
   const ids: Record<string, string | number> = {}
   for (const key of ['simkl', 'imdb', 'tmdb', 'tvdb'] as const) {
     const value = media.ids[key]
@@ -578,7 +647,250 @@ function simklWriteIds(media: MediaRef): Record<string, string | number> | null 
     const value = media.ids.external?.[namespace]
     if (value !== undefined && value !== null && String(value).trim()) ids[namespace] = value
   }
+  if (media.ids.slug && String(media.ids.slug).trim()) ids.traktslug = String(media.ids.slug).trim()
+  if (options.stripAnimeEntryIds) {
+    delete ids.simkl
+    for (const namespace of SIMKL_ANIME_ID_NAMESPACES) delete ids[namespace]
+  }
   return Object.keys(ids).length ? ids : null
+}
+
+interface SimklAnimeVideoIdParts {
+  namespace: typeof SIMKL_ANIME_ID_NAMESPACES[number]
+  id: string | number
+  episode: number
+}
+
+function parseSimklAnimeVideoId(value: unknown): SimklAnimeVideoIdParts | null {
+  const normalized = String(value ?? '').trim()
+  const match = /^(mal|anidb|anilist|kitsu):(\d+):(\d+)(?::|$)/i.exec(normalized)
+  if (!match) return null
+  const id = Number(match[2])
+  const episode = Number(match[3])
+  if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(episode) || episode < 1) {
+    return null
+  }
+  return {
+    namespace: match[1].toLowerCase() as SimklAnimeVideoIdParts['namespace'],
+    id,
+    episode
+  }
+}
+
+function nuvioVideoContentId(value: unknown): string | null {
+  const anime = parseSimklAnimeVideoId(value)
+  if (anime) return `${anime.namespace}:${anime.id}`
+  return parseStremioVideoId(value)?.contentId || null
+}
+
+function simklAnimeContentId(media: MediaRef): string | null {
+  const destination = /^((?:mal|anidb|anilist|kitsu)):(\d+)$/i.exec(
+    String(media.destinationContentId || '').trim()
+  )
+  if (destination) return `${destination[1].toLowerCase()}:${Number(destination[2])}`
+  const video = parseSimklAnimeVideoId(media.videoId)
+  if (video) return `${video.namespace}:${video.id}`
+  for (const namespace of ['kitsu', 'mal', 'anidb', 'anilist'] as const) {
+    const value = externalIdValue(media.ids.external?.[namespace])
+    if (value !== null) return `${namespace}:${value}`
+  }
+  return null
+}
+
+function isSimklAnimeMedia(media: MediaRef): boolean {
+  return Boolean(
+    parseSimklAnimeVideoId(media.videoId)
+    || SIMKL_ANIME_ID_NAMESPACES.some(namespace => (
+      externalIdValue(media.ids.external?.[namespace]) !== null
+    ))
+  )
+}
+
+interface SimklEpisodeWriteResolution {
+  ids: Record<string, string | number> | null
+  season?: number
+  episode?: number
+  isAnime: boolean
+  nativeAnime: boolean
+}
+
+function resolveSimklEpisodeWrite(media: MediaRef): SimklEpisodeWriteResolution {
+  const animeVideo = parseSimklAnimeVideoId(media.videoId)
+  if (media.kind === 'series' && animeVideo) {
+    return {
+      ids: { [animeVideo.namespace]: animeVideo.id },
+      episode: animeVideo.episode,
+      isAnime: true,
+      nativeAnime: true
+    }
+  }
+
+  const parsedVideo = parseStremioVideoId(media.videoId)
+  const season = Number.isInteger(media.season)
+    ? Number(media.season)
+    : parsedVideo?.season
+  const episode = Number.isInteger(media.episode)
+    ? Number(media.episode)
+    : parsedVideo?.episode
+  const isAnime = isSimklAnimeMedia(media)
+  const flatAnimeEpisode = Number.isInteger(media.absoluteEpisode)
+    ? Number(media.absoluteEpisode)
+    : episode
+  if (isAnime && season === undefined && Number.isInteger(flatAnimeEpisode)) {
+    return {
+      ids: simklWriteIds(media),
+      episode: flatAnimeEpisode,
+      isAnime: true,
+      nativeAnime: true
+    }
+  }
+  return {
+    ids: simklWriteIds(media, {
+      stripAnimeEntryIds: Boolean(isAnime && Number.isInteger(season) && Number(season) > 0)
+    }),
+    season,
+    episode,
+    isAnime,
+    nativeAnime: false
+  }
+}
+
+function simklSubject(
+  media: MediaRef,
+  ids: Record<string, string | number> | null
+): Record<string, any> | null {
+  const title = String(media.title || '').trim()
+  if (!ids && !title) return null
+  return {
+    ...(title ? { title } : {}),
+    ...(Number.isInteger(media.year) && Number(media.year) > 0 ? { year: Number(media.year) } : {}),
+    ...(ids ? { ids } : {})
+  }
+}
+
+function simklCacheAccountKey(connection: BridgeConnection): string {
+  return `${connection.accountId || 'unknown'}:${connection.credentials.service}`
+}
+
+function simklSnapshotLookupKeys(media: MediaRef): string[] {
+  // Match the destination snapshot through provider identities exactly as
+  // Nuvio does. Title/year remains a valid Simkl write fallback, but it must
+  // not merge conflicting/remade catalog entries inside the snapshot index.
+  return mediaAliasKeys(media)
+}
+
+function mergeSimklMediaIds(primary: MediaIds, secondary: MediaIds): MediaIds {
+  const external = {
+    ...(secondary.external || {}),
+    ...(primary.external || {})
+  }
+  return {
+    ...secondary,
+    ...primary,
+    ...(Object.keys(external).length ? { external } : {})
+  }
+}
+
+function resetSimklSnapshotCaches(connection: BridgeConnection): void {
+  const key = simklCacheAccountKey(connection)
+  simklMediaSnapshotCaches.delete(key)
+  simklEpisodeCatalogCaches.delete(key)
+}
+
+function rememberSimklMediaSnapshot(connection: BridgeConnection, media: MediaRef): MediaRef {
+  const accountKey = simklCacheAccountKey(connection)
+  let cache = simklMediaSnapshotCaches.get(accountKey)
+  if (!cache) {
+    cache = new Map()
+    simklMediaSnapshotCaches.set(accountKey, cache)
+  }
+
+  const incomingKeys = simklSnapshotLookupKeys(media)
+  const existingEntries = [...new Set(incomingKeys.map(key => cache!.get(key)).filter(Boolean))] as MediaRef[]
+  const canonical = existingEntries[0] || {
+    ...media,
+    ids: mergeSimklMediaIds(media.ids, {})
+  }
+  canonical.ids = mergeSimklMediaIds(canonical.ids, media.ids)
+  canonical.title = canonical.title || media.title
+  canonical.year = canonical.year || media.year
+
+  // A later bucket can expose another alias for an entry already indexed by
+  // IMDb/TVDB. Merge those objects and repoint their old aliases so every ID
+  // resolves to the same complete Simkl snapshot reference.
+  for (const duplicate of existingEntries.slice(1)) {
+    canonical.ids = mergeSimklMediaIds(canonical.ids, duplicate.ids)
+    canonical.title = canonical.title || duplicate.title
+    canonical.year = canonical.year || duplicate.year
+    for (const [key, value] of cache.entries()) {
+      if (value === duplicate) cache.set(key, canonical)
+    }
+  }
+  for (const key of simklSnapshotLookupKeys(canonical)) cache.set(key, canonical)
+  for (const key of incomingKeys) cache.set(key, canonical)
+  return canonical
+}
+
+function enrichMediaFromSimklSnapshot(connection: BridgeConnection, media: MediaRef): MediaRef {
+  const cache = simklMediaSnapshotCaches.get(simklCacheAccountKey(connection))
+  const snapshot = simklSnapshotLookupKeys(media)
+    .map(key => cache?.get(key))
+    .find(Boolean)
+  if (!snapshot) return media
+  return {
+    ...media,
+    title: snapshot.title || media.title,
+    year: snapshot.year || media.year,
+    ids: mergeSimklMediaIds(snapshot.ids, media.ids)
+  }
+}
+
+function simklEpisodeIdentity(episode: EpisodeRef): string {
+  return [
+    String(episode.contentId || ''),
+    episode.season,
+    episode.episode,
+    episode.absoluteEpisode || '',
+    String(episode.videoId || '')
+  ].join(':')
+}
+
+function mergeSimklEpisodeCatalogs(catalogs: readonly (readonly EpisodeRef[])[]): EpisodeRef[] {
+  const merged = new Map<string, EpisodeRef>()
+  for (const episode of catalogs.flat()) merged.set(simklEpisodeIdentity(episode), episode)
+  return [...merged.values()]
+}
+
+function rememberSimklEpisodeCatalog(
+  connection: BridgeConnection,
+  media: MediaRef,
+  episodes: readonly EpisodeRef[]
+): void {
+  if (!episodes.length) return
+  const accountKey = simklCacheAccountKey(connection)
+  let cache = simklEpisodeCatalogCaches.get(accountKey)
+  if (!cache) {
+    cache = new Map()
+    simklEpisodeCatalogCaches.set(accountKey, cache)
+  }
+  const keys = simklSnapshotLookupKeys(media)
+  const existing = [...new Set(keys.map(key => cache!.get(key)).filter(Boolean))] as EpisodeRef[][]
+  const canonical = existing[0] || []
+  const merged = mergeSimklEpisodeCatalogs([...existing, episodes])
+  const nativeOwners = new Set(
+    merged.map(episode => episode.contentId).filter(Boolean)
+  )
+  const ordered = simklAnimeContentId(media) && nativeOwners.size > 1
+    ? merged.map((episode, sequenceIndex) => ({ ...episode, sequenceIndex }))
+    : merged.map(({ sequenceIndex: _sequenceIndex, ...episode }) => episode)
+  canonical.splice(0, canonical.length, ...ordered)
+  for (const duplicate of existing.slice(1)) {
+    duplicate.splice(0, duplicate.length, ...ordered)
+    for (const [key, value] of cache.entries()) {
+      if (value === duplicate) cache.set(key, canonical)
+    }
+  }
+  for (const key of keys) cache.set(key, canonical)
 }
 
 function nowIso() {
@@ -775,6 +1087,10 @@ export async function nuvioRpc(
   body: Record<string, any> = {}
 ): Promise<any> {
   if (connection.credentials.service !== 'nuvio') throw new Error('Expected Nuvio credentials.')
+  const isMutation = /^sync_(?:push|delete)_/.test(name)
+  const requestBody = isMutation
+    ? { ...body, p_origin_client_id: body.p_origin_client_id || nuvioOriginClientId() }
+    : body
   const request = () => retryBridgeOperation(async () => {
     const token = await ensureNuvioToken(connection)
     const { data } = await requestBridgeJson(`${NUVIO_API}/rest/v1/rpc/${name}`, {
@@ -786,11 +1102,11 @@ export async function nuvioRpc(
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(requestBody)
     })
     return data
   })
-  return /^sync_(?:push|delete)_/.test(name)
+  return isMutation
     ? nuvioWriteLimiter(connection.credentials)(request)
     : request()
 }
@@ -822,50 +1138,68 @@ async function simklRequest(
   connection: BridgeConnection,
   path: string,
   params: Record<string, any> = {},
-  options: RequestInit = {}
+  options: BridgeRequestInit = {}
 ): Promise<JsonResponse> {
   if (connection.credentials.service !== 'simkl') throw new Error('Expected Simkl credentials.')
   const url = new URL(`${SIMKL_API}${path}`)
   const query = {
+    ...params,
     client_id: connection.credentials.clientId,
-    'app-name': 'Nuvio Wiki Sync Bridge',
-    'app-version': '2.0',
-    ...params
+    'app-name': 'nuvio-wiki',
+    'app-version': '2.0'
   }
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
   }
   const requestOptions = {
     ...options,
+    timeoutMs: options.timeoutMs || (
+      String(options.method || 'GET').toUpperCase() === 'GET'
+        ? PROVIDER_READ_REQUEST_TIMEOUT_MS
+        : PROVIDER_WRITE_REQUEST_TIMEOUT_MS
+    ),
+    timeoutMessage: options.timeoutMessage || `Simkl ${path} did not respond before the deadline.`,
     headers: {
       Accept: 'application/json',
       Authorization: `Bearer ${connection.credentials.accessToken}`,
+      'User-Agent': 'Nuvio-Wiki-Sync-Bridge/2.0',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {})
     }
   }
   const isWrite = String(options.method || 'GET').toUpperCase() !== 'GET'
-  // Simkl permits one scrobble operation per user at a time. Callers await each
-  // scrobble sequentially, so an additional fixed 20-second delay only makes a
-  // migration slower without reducing overlap.
-  const minimumWriteGapMs = path.startsWith('/scrobble/') ? 0 : 1_050
-  if (isWrite) await waitForWriteSlot(connection.credentials, minimumWriteGapMs)
-  try {
-    return await requestBridgeJson(url.toString(), requestOptions)
-  } catch (error: any) {
-    const rateLimitCode = String(error?.body?.error || error?.body?.code || '').toUpperCase()
-    const rateLimited = error?.status === 429
-      || (error?.status === 400 && rateLimitCode === 'RATE_LIMIT')
-      || rateLimitCode === 'RATE_LIMIT'
-    if (!rateLimited) throw error
-    const retrySeconds = Math.max(
-      isWrite ? 20 : 1,
-      Number(error.headers?.get?.('retry-after') || 0)
-    )
-    await sleep(retrySeconds * 1000, options.signal)
-    if (isWrite) await waitForWriteSlot(connection.credentials, minimumWriteGapMs)
-    return requestBridgeJson(url.toString(), requestOptions)
-  }
+  return simklRequestLimiter(connection.credentials)(async () => {
+    const request = async () => {
+      await waitForSimklRequestSlot(connection.credentials, isWrite)
+      try {
+        return await requestBridgeJson(url.toString(), requestOptions)
+      } finally {
+        recordSimklRequestCompletion(connection.credentials, isWrite)
+      }
+    }
+    const retryOptions = {
+      retries: 4,
+      baseDelayMs: 1_000,
+      maxDelayMs: 16_000,
+      signal: options.signal || undefined,
+      shouldRetry(error: any) {
+        const status = Number(error?.status)
+        return status === 429
+          || [500, 502, 503].includes(status)
+          || error?.name === 'TimeoutError'
+          || error?.name === 'TypeError'
+      }
+    }
+    try {
+      return await retryBridgeOperation(request, retryOptions)
+    } catch (error: any) {
+      const rateLimitCode = String(error?.body?.error || error?.body?.code || '').toUpperCase()
+      if (error?.status !== 400 || rateLimitCode !== 'RATE_LIMIT') throw error
+      const retrySeconds = Math.max(3, Number(error.headers?.get?.('retry-after') || 0))
+      await sleep(retrySeconds * 1000, options.signal || undefined)
+      return retryBridgeOperation(request, retryOptions)
+    }
+  })
 }
 
 export async function stremioRequest(
@@ -2745,15 +3079,17 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
   const historyRequest = scopes.history ? (async () => {
     logTo(log, 'Reading Nuvio watched items...')
     let rejected = 0
-    for (let page = 1; page <= 200; page++) {
+    for (let page = 1; ; page++) {
       const rows = await nuvioRpc(connection, 'sync_pull_watched_items', {
         p_profile_id: profileId,
         p_page: page,
-        p_page_size: 500
+        p_page_size: NUVIO_WATCHED_PAGE_SIZE
       })
       const batch = Array.isArray(rows) ? rows : []
       for (const item of batch) {
         const contentId = String(item.content_id ?? '').trim()
+          || nuvioVideoContentId(item.video_id)
+          || ''
         const season = item.season === null || item.season === undefined || item.season === ''
           ? undefined
           : Number(item.season)
@@ -2769,14 +3105,17 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
           episode,
           videoId: item.video_id || undefined
         }
+        const explicitZeroMarker = watchedAt === 0
+          && item.watched_at !== null
+          && item.watched_at !== undefined
+          && String(item.watched_at).trim() !== ''
+          && Number(item.watched_at) === 0
+          && (media.kind === 'movie' || (season === undefined && episode === undefined))
         const invalidReason = !contentId
           ? 'Nuvio returned a watched record without a content ID.'
-          : watchedAt <= 0
+          : watchedAt <= 0 && !explicitZeroMarker
             ? 'Nuvio returned a watched record without a valid watched timestamp.'
-            : media.kind === 'series'
-              && (!Number.isInteger(season) || Number(season) < 0 || !Number.isInteger(episode) || Number(episode) < 1)
-              ? 'Nuvio returned a series-level watched marker without a deterministic season and episode.'
-              : ''
+            : ''
         if (invalidReason) {
           rejected++
           issues.push({
@@ -2798,7 +3137,7 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
         }
         bundle.history.push({ media, watchedAt, source: provenance })
       }
-      if (batch.length < 500) break
+      if (batch.length < NUVIO_WATCHED_PAGE_SIZE) break
     }
     if (rejected) logTo(log, `Ignored ${rejected} invalid Nuvio watched ${rejected === 1 ? 'record' : 'records'}.`)
   })() : Promise.resolve()
@@ -2806,22 +3145,39 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
   const progressRequest = scopes.progress ? (async () => {
     logTo(log, 'Reading Nuvio resume points...')
     const rows = await nuvioRpc(connection, 'sync_pull_watch_progress', {
-      p_profile_id: profileId,
-      p_since_last_watched: 0,
-      p_limit: 100_000
+      p_profile_id: profileId
     })
     const progressRows = Array.isArray(rows) ? rows : []
     for (const item of progressRows) {
       const durationMs = positiveNumber(item.duration)
       const positionMs = positiveNumber(item.position)
       if (!durationMs || !positionMs) continue
+      const contentId = String(item.content_id ?? '').trim()
+        || nuvioVideoContentId(item.video_id)
+        || ''
+      if (!contentId) {
+        issues.push({
+          scope: 'progress',
+          status: 'unresolved',
+          code: 'source_record_invalid',
+          reason: 'Nuvio returned a resume point without a content ID.',
+          evidence: {
+            aliases: item.video_id ? [`nuvio:video_id:${String(item.video_id)}`] : []
+          }
+        })
+        continue
+      }
       bundle.progress.push({
         media: {
           kind: item.content_type === 'movie' ? 'movie' : 'series',
-          ids: parseNuvioContentId(item.content_id),
+          ids: parseNuvioContentId(contentId),
           title: item.title,
-          season: item.season === null ? undefined : Number(item.season),
-          episode: item.episode === null ? undefined : Number(item.episode),
+          season: item.season === null || item.season === undefined || item.season === ''
+            ? undefined
+            : Number(item.season),
+          episode: item.episode === null || item.episode === undefined || item.episode === ''
+            ? undefined
+            : Number(item.episode),
           videoId: item.video_id || undefined
         },
         positionMs,
@@ -2830,21 +3186,14 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
         source: provenance
       })
     }
-    if (progressRows.length >= 100_000) {
-      issues.push({
-        scope: 'progress',
-        status: 'warning',
-        reason: 'Nuvio returned the 100,000-item resume-point limit; additional older progress records may not be transferable.'
-      })
-    }
   })() : Promise.resolve()
 
   const libraryRequest = scopes.library ? (async () => {
     logTo(log, 'Reading Nuvio library...')
-    for (let offset = 0; offset < 100_000; offset += 500) {
+    for (let offset = 0; ; offset += NUVIO_LIBRARY_PAGE_SIZE) {
       const rows = await nuvioRpc(connection, 'sync_pull_library', {
         p_profile_id: profileId,
-        p_limit: 500,
+        p_limit: NUVIO_LIBRARY_PAGE_SIZE,
         p_offset: offset
       })
       const batch = Array.isArray(rows) ? rows : []
@@ -2862,7 +3211,7 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
           source: provenance
         })
       }
-      if (batch.length < 500) break
+      if (batch.length < NUVIO_LIBRARY_PAGE_SIZE) break
     }
   })() : Promise.resolve()
 
@@ -2902,28 +3251,6 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
     : undefined
 
   return { bundle: dedupeBundle(bundle), issues, duplicates }
-}
-
-function cleanNuvioLibraryItem(item: any) {
-  const cleaned: Record<string, any> = {
-    content_id: item.content_id,
-    content_type: item.content_type,
-    name: item.name,
-    added_at: Number(item.added_at || Date.now())
-  }
-  for (const key of [
-    'poster',
-    'poster_shape',
-    'background',
-    'description',
-    'release_info',
-    'imdb_rating',
-    'genres',
-    'addon_base_url'
-  ]) {
-    if (item[key] !== undefined && item[key] !== null && item[key] !== '') cleaned[key] = item[key]
-  }
-  return cleaned
 }
 
 interface NuvioLibraryImport {
@@ -3194,21 +3521,6 @@ function enrichNuvioLibraryImports(
   }
 }
 
-async function pullEntireNuvioLibrary(connection: BridgeConnection, profileId: number): Promise<any[]> {
-  const output: any[] = []
-  for (let offset = 0; offset < 100_000; offset += 500) {
-    const rows = await nuvioRpc(connection, 'sync_pull_library', {
-      p_profile_id: profileId,
-      p_limit: 500,
-      p_offset: offset
-    })
-    const batch = Array.isArray(rows) ? rows : []
-    output.push(...batch)
-    if (batch.length < 500) break
-  }
-  return output
-}
-
 async function pushNuvio(options: PushOptions): Promise<PushResult> {
   const { connection, bundle, scopes, log } = options
   const profileId = Number(connection.profileId)
@@ -3249,15 +3561,14 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         skip({ scope: 'history', status: 'unresolved', media: record.media, reason: 'Nuvio needs a supported content ID.' })
         continue
       }
-      if (record.media.kind === 'series' && (!Number.isInteger(record.media.season) || !Number.isInteger(record.media.episode))) {
-        skip({ scope: 'history', status: 'unresolved', media: record.media, reason: 'The Nuvio episode has no deterministic season and episode number.' })
-        continue
-      }
+      const season = Number.isInteger(record.media.season) ? Number(record.media.season) : undefined
+      const episode = Number.isInteger(record.media.episode) ? Number(record.media.episode) : undefined
       rows.push({
         content_id: contentId,
         content_type: record.media.kind === 'movie' ? 'movie' : 'series',
         title: mediaTitle(record.media),
-        ...(record.media.kind === 'series' ? { season: record.media.season, episode: record.media.episode } : {}),
+        ...(record.media.kind === 'series' && season !== undefined ? { season } : {}),
+        ...(record.media.kind === 'series' && episode !== undefined ? { episode } : {}),
         watched_at: record.watchedAt
       })
       // A remap can move Trakt S2E1 to another owner's (or numbering scheme's)
@@ -3268,9 +3579,8 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
           const key = {
             content_id: legacyId,
-            ...(record.media.kind === 'series'
-              ? { season: record.media.season, episode: record.media.episode }
-              : {})
+            ...(record.media.kind === 'series' && season !== undefined ? { season } : {}),
+            ...(record.media.kind === 'series' && episode !== undefined ? { episode } : {})
           }
           legacyKeys.set(JSON.stringify(key), key)
         }
@@ -3307,6 +3617,9 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         skip({ scope: 'progress', status: 'unresolved', media: record.media, reason: 'The Nuvio episode progress has no deterministic season and episode number.' })
         continue
       }
+      const progressKey = record.media.kind === 'series'
+        ? `${contentId}_s${record.media.season}e${record.media.episode}`
+        : contentId
       rows.push({
         content_id: contentId,
         content_type: record.media.kind === 'movie' ? 'movie' : 'series',
@@ -3318,7 +3631,8 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         ...(record.media.kind === 'series' ? { season: record.media.season, episode: record.media.episode } : {}),
         position: Math.round(absolute.positionMs),
         duration: Math.round(absolute.durationMs),
-        last_watched: record.updatedAt
+        last_watched: record.updatedAt,
+        progress_key: progressKey
       })
       if (record.media.kind !== 'series' || !record.media.destinationEpisodeRemapped) {
         for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
@@ -3345,10 +3659,7 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
   })() : Promise.resolve()
 
   const libraryWrite = scopes.library && bundle.library.length ? (async () => {
-    logTo(log, 'Merging with the full destination Nuvio library...')
-    const existing = await pullEntireNuvioLibrary(connection, profileId)
-    const merged = new Map<string, any>()
-    for (const item of existing) merged.set(`${item.content_type}:${item.content_id}`, cleanNuvioLibraryItem(item))
+    logTo(log, 'Adding items to the Nuvio library...')
     const imports: NuvioLibraryImport[] = []
     for (const record of bundle.library) {
       const contentId = resolvedNuvioContentId(record.media, metadataByMedia.get(record.media))
@@ -3362,39 +3673,49 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
           content_id: contentId,
           content_type: record.media.kind === 'movie' ? 'movie' : 'series',
           name: record.media.title || 'Untitled',
+          poster: null,
+          poster_shape: 'POSTER',
+          background: null,
+          description: null,
+          release_info: record.media.year ? String(record.media.year) : null,
+          imdb_rating: null,
+          genres: [],
+          addon_base_url: null,
           added_at: record.addedAt || Date.now()
         }
       })
-      written.library++
     }
     enrichNuvioLibraryImports(imports, metadataByMedia)
-    for (const { item, media } of imports) {
-      const key = `${item.content_type}:${item.content_id}`
-      let current = merged.get(key) || {}
-      // Fold any older TMDB-keyed row into the preferred IMDb key. Nuvio's
-      // library RPC accepts a complete snapshot, so omitting the alias removes
-      // the duplicate while preserving its metadata in the merged record.
-      const resolvedMedia = withResolvedExternalIds(media, metadataByMedia.get(media))
-      for (const candidateId of nuvioContentIds(resolvedMedia)) {
-        const candidateKey = `${item.content_type}:${candidateId}`
-        if (candidateKey === key || !merged.has(candidateKey)) continue
-        current = { ...merged.get(candidateKey), ...current }
-        merged.delete(candidateKey)
-      }
-      merged.set(key, {
-        ...current,
-        ...item,
-        name: item.name || current.name || 'Untitled',
-        added_at: Math.max(Number(current.added_at || 0), Number(item.added_at || 0))
-      })
-    }
     if (imports.length) {
-      await nuvioRpc(connection, 'sync_push_library', {
-        p_profile_id: profileId,
-        p_items: [...merged.values()]
-      })
+      const preferredKeys = new Set(imports.map(({ item }) => (
+        `${item.content_type}:${item.content_id}`
+      )))
+      const aliasKeys = new Map<string, { content_id: string; content_type: string }>()
+      for (const { item, media } of imports) {
+        const metadata = metadataByMedia.get(media)
+        for (const contentId of alternateNuvioContentIds(media, item.content_id, metadata)) {
+          const key = `${item.content_type}:${contentId}`
+          if (preferredKeys.has(key)) continue
+          aliasKeys.set(key, { content_id: contentId, content_type: item.content_type })
+        }
+      }
+      await Promise.all(chunk(imports, NUVIO_LIBRARY_MUTATION_BATCH_SIZE).map(async batch => {
+        await nuvioRpc(connection, 'sync_push_library_items', {
+          p_profile_id: profileId,
+          p_items: batch.map(({ item }) => item)
+        })
+      }))
+      if (aliasKeys.size) {
+        await Promise.all(chunk([...aliasKeys.values()], NUVIO_LIBRARY_MUTATION_BATCH_SIZE).map(async keys => {
+          await nuvioRpc(connection, 'sync_delete_library_items', {
+            p_profile_id: profileId,
+            p_keys: keys
+          })
+        }))
+      }
+      written.library += imports.length
     }
-    logTo(log, `Merged ${written.library} titles into the Nuvio library without removing unrelated items.`)
+    logTo(log, `Added ${written.library} titles to the Nuvio library without removing unrelated items.`)
   })() : Promise.resolve()
 
   await Promise.all([historyWrite, progressWrite, libraryWrite])
@@ -3427,7 +3748,56 @@ function mediaFromSimkl(value: any, kind: 'movie' | 'series'): MediaRef {
   }
 }
 
+function simklInteger(value: unknown, minimum = 1): number | undefined {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : undefined
+}
+
+function simklProjectedEpisode(
+  media: MediaRef,
+  season: any,
+  episode: any,
+  animeBucket = false
+): EpisodeRef | null {
+  const nativeEpisode = simklInteger(episode?.number ?? episode?.episode)
+  const nativeSeason = simklInteger(season?.number ?? episode?.season, 0)
+  const tvdbSeason = simklInteger(episode?.tvdb?.season ?? episode?.tvdb_season, 0)
+  const tvdbEpisode = simklInteger(
+    episode?.tvdb?.episode ?? episode?.tvdb?.number ?? episode?.tvdb_number
+  )
+  const episodeNumber = tvdbEpisode ?? nativeEpisode
+  const seasonNumber = tvdbSeason ?? nativeSeason ?? (animeBucket ? 0 : undefined)
+  if (episodeNumber === undefined || seasonNumber === undefined) return null
+
+  const animeContentId = animeBucket ? simklAnimeContentId(media) : null
+  const owner = animeContentId || stremioContentId(media) || undefined
+  const nativeVideoId = animeContentId && nativeEpisode
+    ? `${animeContentId}:${nativeEpisode}`
+    : owner
+      ? `${owner}:${seasonNumber}:${episodeNumber}`
+      : undefined
+  return {
+    season: seasonNumber,
+    episode: episodeNumber,
+    absoluteEpisode: nativeEpisode,
+    title: episode?.title,
+    videoId: nativeVideoId,
+    contentId: owner
+  }
+}
+
+const SIMKL_LIST_STATUS_LABELS: Record<string, string> = {
+  watching: 'Watching',
+  plantowatch: 'Plan to Watch',
+  'plan-to-watch': 'Plan to Watch',
+  watchlist: 'Plan to Watch',
+  hold: 'On Hold',
+  completed: 'Completed',
+  dropped: 'Dropped'
+}
+
 function appendSimklItems(
+  connection: BridgeConnection,
   data: any,
   bucket: 'movies' | 'shows' | 'anime',
   scopes: SyncScopes,
@@ -3436,25 +3806,43 @@ function appendSimklItems(
 ) {
   for (const item of simklRows(data, bucket)) {
     const subject = item.movie || item.show || item.anime || item
-    const media = mediaFromSimkl(subject, bucket === 'movies' ? 'movie' : 'series')
+    if (!subject || typeof subject !== 'object') continue
+    const animeMovie = bucket === 'anime'
+      && String(item.anime_type || subject.anime_type || '').toLowerCase() === 'movie'
+    const media = mediaFromSimkl(subject, bucket === 'movies' || animeMovie ? 'movie' : 'series')
+    rememberSimklMediaSnapshot(connection, media)
     const status = String(item.status || subject.status || '').toLowerCase()
 
-    if (scopes.library && ['plantowatch', 'plan-to-watch', 'watchlist'].includes(status)) {
+    if (scopes.library && SIMKL_LIST_STATUS_LABELS[status]) {
       bundle.library.push({
-        media,
+        media: { ...media, ids: mergeSimklMediaIds(media.ids, {}) },
         addedAt: asEpochMs(item.added_to_watchlist_at || item.last_watched_at || item.updated_at),
-        lists: [{ ...provenance, kind: 'watchlist', name: 'Plan to Watch' }],
+        lists: [{ ...provenance, kind: 'watchlist', name: SIMKL_LIST_STATUS_LABELS[status] }],
         source: provenance
       })
+    }
+
+    const episodeCatalog: EpisodeRef[] = []
+    if (media.kind === 'series') {
+      for (const season of item.seasons || subject.seasons || []) {
+        for (const episode of season.episodes || []) {
+          const projected = simklProjectedEpisode(media, season, episode, bucket === 'anime')
+          if (projected) episodeCatalog.push(projected)
+        }
+      }
+      rememberSimklEpisodeCatalog(connection, media, episodeCatalog)
     }
 
     if (!scopes.history) continue
     if (media.kind === 'movie') {
       const watchedAt = item.last_watched_at || item.watched_at
       if (watchedAt || status === 'completed') {
+        const timestamp = asEpochMs(
+          watchedAt || item.added_to_watchlist_at || item.updated_at
+        )
         bundle.history.push({
           media,
-          watchedAt: asEpochMs(watchedAt),
+          watchedAt: timestamp,
           playCount: positiveNumber(item.watched, 1),
           source: provenance
         })
@@ -3462,28 +3850,46 @@ function appendSimklItems(
       continue
     }
 
+    let exactEpisodeRows = 0
     for (const season of item.seasons || subject.seasons || []) {
       for (const episode of season.episodes || []) {
         const watchedAt = episode.watched_at || episode.last_watched_at
-        if (!watchedAt && episode.watched !== true && Number(episode.watched) < 1) continue
+        const timestamp = asEpochMs(watchedAt)
+        if (!timestamp) continue
+        const projected = simklProjectedEpisode(media, season, episode, bucket === 'anime')
+        if (!projected) continue
+        exactEpisodeRows++
         bundle.history.push({
           media: {
             ...media,
-            season: Number(season.number),
-            episode: Number(episode.number),
-            absoluteEpisode: Number(episode.episode) || undefined,
-            episodeTitle: episode.title
+            season: projected.season,
+            episode: projected.episode,
+            absoluteEpisode: projected.absoluteEpisode,
+            episodeTitle: projected.title,
+            videoId: projected.videoId,
+            destinationContentId: projected.contentId
           },
-          watchedAt: asEpochMs(watchedAt || item.last_watched_at),
+          watchedAt: timestamp,
           playCount: positiveNumber(episode.watched, 1),
           source: provenance
         })
       }
     }
+    if (status === 'completed' && exactEpisodeRows === 0) {
+      bundle.history.push({
+        media,
+        watchedAt: asEpochMs(
+          item.last_watched_at || item.added_to_watchlist_at || item.updated_at
+        ),
+        playCount: 1,
+        source: provenance
+      })
+    }
   }
 }
 
 function appendSimklPlayback(
+  connection: BridgeConnection,
   data: any,
   bundle: CanonicalBundle,
   issues: BridgeIssue[],
@@ -3492,13 +3898,30 @@ function appendSimklPlayback(
   const rows = Array.isArray(data) ? data : Array.isArray(data?.playback) ? data.playback : []
   for (const item of rows) {
     const subject = item.movie || item.show || item.anime
+    if (!subject || typeof subject !== 'object') continue
     const isMovie = Boolean(item.movie) || item.type === 'movie'
-    const media = mediaFromSimkl(subject, isMovie ? 'movie' : 'series')
+    const baseMedia = mediaFromSimkl(subject, isMovie ? 'movie' : 'series')
+    rememberSimklMediaSnapshot(connection, baseMedia)
+    let media = baseMedia
     if (!isMovie) {
-      media.season = Number(item.episode?.season)
-      media.episode = Number(item.episode?.number)
-      media.absoluteEpisode = Number(item.episode?.episode) || undefined
-      media.episodeTitle = item.episode?.title
+      const projected = simklProjectedEpisode(
+        baseMedia,
+        { number: item.episode?.season },
+        item.episode,
+        Boolean(item.anime)
+      )
+      if (projected) {
+        media = {
+          ...baseMedia,
+          season: projected.season,
+          episode: projected.episode,
+          absoluteEpisode: projected.absoluteEpisode,
+          episodeTitle: projected.title,
+          videoId: projected.videoId,
+          destinationContentId: projected.contentId
+        }
+        rememberSimklEpisodeCatalog(connection, baseMedia, [projected])
+      }
     }
     const runtimeSeconds = positiveNumber(item.runtime) * (
       positiveNumber(item.runtime) < 1_000 ? 60 : 1
@@ -3515,14 +3938,14 @@ function appendSimklPlayback(
         positionMs,
         durationMs,
         percentage: Math.min(100, percentage || positionMs / durationMs * 100),
-        updatedAt: asEpochMs(item.paused_at || item.updated_at),
+        updatedAt: asEpochMs(item.paused_at || item.watched_at || item.updated_at),
         source: provenance
       })
     } else if (percentage) {
       bundle.progress.push({
         media,
         percentage: Math.min(100, percentage),
-        updatedAt: asEpochMs(item.paused_at || item.updated_at),
+        updatedAt: asEpochMs(item.paused_at || item.watched_at || item.updated_at),
         source: provenance
       })
     } else {
@@ -3537,17 +3960,15 @@ function appendSimklPlayback(
 }
 
 function simklItemParams(scopes: SyncScopes, dateFrom?: string) {
-  return scopes.history
-    ? {
-        extended: 'full',
-        episode_watched_at: 'yes',
-        include_all_episodes: 'yes',
-        ...(dateFrom ? { date_from: dateFrom } : {})
-      }
-    : {
-        extended: 'simkl_ids_only',
-        ...(dateFrom ? { date_from: dateFrom } : {})
-      }
+  void scopes
+  return {
+    extended: 'full_anime_seasons',
+    episode_watched_at: 'yes',
+    episode_tvdb_id: 'yes',
+    include_all_episodes: 'yes',
+    language: 'en',
+    ...(dateFrom ? { date_from: dateFrom } : {})
+  }
 }
 
 async function pullSimkl(options: PullOptions): Promise<PullResult> {
@@ -3555,32 +3976,34 @@ async function pullSimkl(options: PullOptions): Promise<PullResult> {
   const bundle = createEmptyBundle()
   const issues: BridgeIssue[] = []
   const provenance = sourceOf(connection)
+  resetSimklSnapshotCaches(connection)
 
-  const itemBuckets = scopes.history || scopes.library
+  const itemBuckets = Object.values(scopes).some(Boolean)
     ? (['movies', 'shows', 'anime'] as const)
     : []
-  if (itemBuckets.length) logTo(log, 'Reading Simkl movies, shows, and anime concurrently...')
+  if (itemBuckets.length) logTo(log, 'Reading complete Simkl movie, show, and anime snapshots...')
   if (scopes.progress) logTo(log, 'Reading Simkl playback sessions...')
 
-  const [itemResponses, playbackResponse] = await Promise.all([
-    Promise.all(itemBuckets.map(async bucket => ({
+  const itemResponses: Array<{ bucket: (typeof itemBuckets)[number]; data: any }> = []
+  for (const bucket of itemBuckets) {
+    itemResponses.push({
       bucket,
       data: (await simklRequest(
         connection,
         `/sync/all-items/${bucket}`,
         simklItemParams(scopes)
       )).data
-    }))),
-    scopes.progress
-      ? simklRequest(connection, '/sync/playback')
-      : Promise.resolve(null)
-  ])
+    })
+  }
+  const playbackResponse = scopes.progress
+    ? await simklRequest(connection, '/sync/playback')
+    : null
 
   for (const { bucket, data } of itemResponses) {
-    appendSimklItems(data, bucket, scopes, bundle, provenance)
+    appendSimklItems(connection, data, bucket, scopes, bundle, provenance)
   }
   if (playbackResponse) {
-    appendSimklPlayback(playbackResponse.data, bundle, issues, provenance)
+    appendSimklPlayback(connection, playbackResponse.data, bundle, issues, provenance)
   }
 
   return { bundle: dedupeBundle(bundle), issues }
@@ -3595,70 +4018,146 @@ async function pullSimklDelta(options: PullOptions, dateFrom: string): Promise<P
   if (scopes.history || scopes.library) {
     logTo(log, 'Simkl activity changed; reading the destination delta...')
   }
-  const [itemsResponse, playbackResponse] = await Promise.all([
-    scopes.history || scopes.library
-      ? simklRequest(connection, '/sync/all-items', simklItemParams(scopes, dateFrom))
-      : Promise.resolve(null),
-    scopes.progress
-      ? simklRequest(connection, '/sync/playback')
-      : Promise.resolve(null)
-  ])
-  if (itemsResponse) {
+  if (scopes.history || scopes.library) {
     for (const bucket of ['movies', 'shows', 'anime'] as const) {
-      appendSimklItems(itemsResponse.data, bucket, scopes, bundle, provenance)
+      const response = await simklRequest(
+        connection,
+        `/sync/all-items/${bucket}`,
+        simklItemParams(scopes, dateFrom)
+      )
+      appendSimklItems(connection, response.data, bucket, scopes, bundle, provenance)
     }
   }
+  const playbackResponse = scopes.progress
+    ? await simklRequest(connection, '/sync/playback')
+    : null
   if (playbackResponse) {
-    appendSimklPlayback(playbackResponse.data, bundle, issues, provenance)
+    appendSimklPlayback(connection, playbackResponse.data, bundle, issues, provenance)
   }
 
   return { bundle: dedupeBundle(bundle), issues }
 }
 
-function groupSimklHistory(records: readonly HistoryRecord[]) {
+function simklWriteGroupKey(media: MediaRef, subject: Record<string, any>): string {
+  const ids = subject.ids
+    ? Object.fromEntries(Object.entries(subject.ids).sort(([left], [right]) => left.localeCompare(right)))
+    : null
+  return ids
+    ? `${media.kind}:ids:${JSON.stringify(ids)}`
+    : `${media.kind}:title:${normalizeTitle(String(subject.title || ''))}:${Number(subject.year) || ''}`
+}
+
+function simklWatchedAtIso(value: unknown): string | undefined {
+  const timestamp = Number(value)
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? new Date(timestamp).toISOString()
+    : undefined
+}
+
+function groupSimklHistory(connection: BridgeConnection, records: readonly HistoryRecord[]) {
   const movies: any[] = []
-  const shows = new Map<string, { ids: Record<string, any>; title?: string; year?: number; seasons: Map<number, any> }>()
+  const shows = new Map<string, {
+    subject: Record<string, any>
+    parent?: Record<string, any>
+    episodes: Map<number, any>
+    seasons: Map<number, Map<number, any>>
+    useTvdbAnimeSeasons: boolean
+  }>()
   const issues: BridgeIssue[] = []
   for (const record of records) {
-    const ids = simklWriteIds(record.media)
-    if (!ids) {
-      issues.push({ scope: 'history', status: 'unresolved', media: record.media, reason: 'Simkl needs a supported external ID.' })
+    const media = enrichMediaFromSimklSnapshot(connection, record.media)
+    const resolution = resolveSimklEpisodeWrite(media)
+    const subject = simklSubject(media, resolution.ids)
+    if (!subject) {
+      issues.push({
+        scope: 'history',
+        status: 'unresolved',
+        media: record.media,
+        reason: 'Simkl needs a supported external ID or a title for this history record.'
+      })
       continue
     }
-    if (record.media.kind === 'movie') {
-      movies.push({ title: record.media.title, year: record.media.year, ids, watched_at: new Date(record.watchedAt).toISOString() })
+    const watchedAt = simklWatchedAtIso(record.watchedAt)
+    if (media.kind === 'movie') {
+      movies.push({ ...subject, ...(watchedAt ? { watched_at: watchedAt } : {}) })
       continue
     }
-    if (!Number.isInteger(record.media.season) || !Number.isInteger(record.media.episode)) {
-      issues.push({ scope: 'history', status: 'unresolved', media: record.media, reason: 'The Simkl episode has no deterministic season and episode number.' })
-      continue
-    }
-    const key = JSON.stringify(ids)
+
+    const key = simklWriteGroupKey(media, subject)
     if (!shows.has(key)) {
-      shows.set(key, { ids, title: record.media.title, year: record.media.year, seasons: new Map() })
+      shows.set(key, {
+        subject,
+        episodes: new Map(),
+        seasons: new Map(),
+        useTvdbAnimeSeasons: false
+      })
     }
     const show = shows.get(key)!
-    const seasonNumber = Number(record.media.season)
-    if (!show.seasons.has(seasonNumber)) show.seasons.set(seasonNumber, { number: seasonNumber, episodes: [] })
-    show.seasons.get(seasonNumber).episodes.push({
-      number: Number(record.media.episode),
-      watched_at: new Date(record.watchedAt).toISOString()
-    })
+
+    const isParentMarker = !Number.isInteger(resolution.season)
+      && !Number.isInteger(resolution.episode)
+    if (isParentMarker) {
+      show.parent = {
+        ...subject,
+        ...(watchedAt ? { watched_at: watchedAt } : {}),
+        status: 'completed'
+      }
+      continue
+    }
+
+    if (!Number.isInteger(resolution.episode)) {
+      issues.push({
+        scope: 'history',
+        status: 'unresolved',
+        media: record.media,
+        reason: 'The Simkl episode has no deterministic episode number.'
+      })
+      continue
+    }
+    const episode = {
+      number: Number(resolution.episode),
+      ...(watchedAt ? { watched_at: watchedAt } : {})
+    }
+    if (resolution.nativeAnime) {
+      show.episodes.set(episode.number, episode)
+      continue
+    }
+    if (!Number.isInteger(resolution.season)) {
+      issues.push({
+        scope: 'history',
+        status: 'unresolved',
+        media: record.media,
+        reason: 'The Simkl episode has no deterministic season number.'
+      })
+      continue
+    }
+    const seasonNumber = Number(resolution.season)
+    if (!show.seasons.has(seasonNumber)) show.seasons.set(seasonNumber, new Map())
+    show.seasons.get(seasonNumber)!.set(episode.number, episode)
+    if (resolution.isAnime) show.useTvdbAnimeSeasons = true
   }
   return {
     movies,
-    shows: [...shows.values()].map(show => ({
-      ids: show.ids,
-      title: show.title,
-      year: show.year,
-      seasons: [...show.seasons.values()]
-    })),
+    shows: [...shows.values()].map(show => {
+      if (show.parent) return show.parent
+      return {
+        ...show.subject,
+        ...(show.episodes.size ? { episodes: [...show.episodes.values()] } : {}),
+        ...(show.seasons.size ? {
+          seasons: [...show.seasons.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([number, episodes]) => ({ number, episodes: [...episodes.values()] }))
+        } : {}),
+        ...(show.useTvdbAnimeSeasons ? { use_tvdb_anime_seasons: true } : {})
+      }
+    }),
     issues
   }
 }
 
 function simklHistoryEntryCount(item: any): number {
-  const episodes = (item?.seasons || []).reduce((total: number, season: any) => (
+  const episodes = (Array.isArray(item?.episodes) ? item.episodes.length : 0)
+    + (item?.seasons || []).reduce((total: number, season: any) => (
     total + (Array.isArray(season?.episodes) ? season.episodes.length : 0)
   ), 0)
   return Math.max(1, episodes)
@@ -3675,32 +4174,59 @@ function simklHistoryNotFoundIssues(data: any): BridgeIssue[] {
   for (const movie of data?.not_found?.movies || []) {
     result.push({ scope: 'history', status: 'unresolved', media: mediaFromSimkl(movie.movie || movie, 'movie'), reason })
   }
-  for (const show of data?.not_found?.shows || []) {
+  for (const show of [
+    ...(data?.not_found?.shows || []),
+    ...(data?.not_found?.anime || [])
+  ]) {
     const subject = show.show || show.anime || show
     const media = mediaFromSimkl(subject, 'series')
     let foundEpisode = false
     for (const season of show.seasons || subject.seasons || []) {
       for (const episode of season.episodes || []) {
+        const seasonNumber = simklInteger(season.number, 0)
+        const episodeNumber = simklInteger(episode.number)
+        if (seasonNumber === undefined || episodeNumber === undefined) continue
         foundEpisode = true
         result.push({
           scope: 'history',
           status: 'unresolved',
-          media: { ...media, season: Number(season.number), episode: Number(episode.number) },
+          media: { ...media, season: seasonNumber, episode: episodeNumber },
           reason
         })
       }
+    }
+    for (const episode of show.episodes || subject.episodes || []) {
+      const episodeNumber = simklInteger(episode.number)
+      if (episodeNumber === undefined) continue
+      foundEpisode = true
+      const animeContentId = simklAnimeContentId(media)
+      result.push({
+        scope: 'history',
+        status: 'unresolved',
+        media: {
+          ...media,
+          episode: episodeNumber,
+          absoluteEpisode: episodeNumber,
+          ...(animeContentId ? { videoId: `${animeContentId}:${episodeNumber}` } : {})
+        },
+        reason
+      })
     }
     if (!foundEpisode) result.push({ scope: 'history', status: 'unresolved', media, reason })
   }
   for (const episode of data?.not_found?.episodes || []) {
     const subject = episode.show || episode.anime || episode
+    const season = simklInteger(episode.season ?? episode.episode?.season, 0)
+    const number = simklInteger(
+      episode.number ?? episode.episode?.number ?? episode.episode?.episode
+    )
     result.push({
       scope: 'history',
       status: 'unresolved',
       media: {
         ...mediaFromSimkl(subject, 'series'),
-        season: Number(episode.season ?? episode.episode?.season),
-        episode: Number(episode.number ?? episode.episode?.number)
+        ...(season !== undefined ? { season } : {}),
+        ...(number !== undefined ? { episode: number } : {})
       },
       reason
     })
@@ -3752,9 +4278,10 @@ async function pushSimkl(options: PushOptions): Promise<PushResult> {
   const skipped: Partial<PushCounts> = {}
   const issues: BridgeIssue[] = []
   const confirmedScopes: BridgeScope[] = []
+  let historyResponsesComplete = !scopes.history || bundle.history.length === 0
 
   if (scopes.history && bundle.history.length) {
-    const grouped = groupSimklHistory(collapseHistoryToWatchedState(bundle.history))
+    const grouped = groupSimklHistory(connection, collapseHistoryToWatchedState(bundle.history))
     issues.push(...grouped.issues)
     if (grouped.issues.length) skipped.history = grouped.issues.length
     const payloads = [
@@ -3779,25 +4306,55 @@ async function pushSimkl(options: PushOptions): Promise<PushResult> {
       }
       logTo(log, `Added ${written.history} Simkl history records.`)
     }
+    historyResponsesComplete = responsesComplete
     if (responsesComplete) confirmedScopes.push('history')
   }
 
   if (scopes.library && bundle.library.length) {
     const movies: any[] = []
     const shows: any[] = []
+    const historyKeys = new Set<string>()
+    const failedHistoryKeys = new Set(
+      issues
+        .filter(issue => issue.scope === 'history' && issue.media)
+        .flatMap(issue => simklSnapshotLookupKeys(
+          enrichMediaFromSimklSnapshot(connection, issue.media!)
+        ))
+    )
+    if (scopes.history) {
+      for (const record of bundle.history) {
+        const media = enrichMediaFromSimklSnapshot(connection, record.media)
+        const resolution = resolveSimklEpisodeWrite(media)
+        if (!simklSubject(media, resolution.ids)) continue
+        const keys = simklSnapshotLookupKeys(media)
+        if (keys.some(key => failedHistoryKeys.has(key))) continue
+        for (const key of keys) historyKeys.add(key)
+      }
+    }
+    let membershipsFulfilledByHistory = 0
     for (const record of bundle.library) {
-      const ids = simklWriteIds(record.media)
-      if (!ids) {
+      const media = enrichMediaFromSimklSnapshot(connection, record.media)
+      const subject = simklSubject(media, simklWriteIds(media))
+      if (!subject) {
         skipped.library = (skipped.library || 0) + 1
-        issues.push({ scope: 'library', status: 'unresolved', media: record.media, reason: 'Simkl needs a supported external ID for this saved title.' })
+        issues.push({
+          scope: 'library',
+          status: 'unresolved',
+          media: record.media,
+          reason: 'Simkl needs a supported external ID or a title for this saved item.'
+        })
         continue
       }
-      ;(record.media.kind === 'movie' ? movies : shows).push({
-        title: record.media.title,
-        year: record.media.year,
-        ids,
-        to: 'plantowatch'
-      })
+      // Simkl uses one status per title. Writing Plan to Watch after history
+      // would overwrite the completed/watching status that history just set.
+      // History already keeps the title in Simkl's list, so count the library
+      // membership as fulfilled without issuing the destructive second write.
+      if (simklSnapshotLookupKeys(media).some(key => historyKeys.has(key))) {
+        written.library++
+        membershipsFulfilledByHistory++
+        continue
+      }
+      ;(media.kind === 'movie' ? movies : shows).push({ ...subject, to: 'plantowatch' })
     }
     const payloads = [
       ...chunk(movies, 50).map(batch => ({ movies: batch })),
@@ -3820,26 +4377,22 @@ async function pushSimkl(options: PushOptions): Promise<PushResult> {
         written.library += submitted
       }
     }
-    if (responsesComplete) confirmedScopes.push('library')
+    if (responsesComplete && (!membershipsFulfilledByHistory || historyResponsesComplete)) {
+      confirmedScopes.push('library')
+    }
     logTo(log, `Saved ${written.library} titles to Simkl Plan to Watch.`)
   }
 
   if (scopes.progress && bundle.progress.length) {
-    // Simkl has no bulk playback write, so import resume points as sequential
-    // pause events. A single shared timeout bounds the whole optional phase; this
-    // prevents a rate-limit retry or stalled request from holding the sync open.
-    const signal = AbortSignal.timeout(SIMKL_PROGRESS_IMPORT_TIMEOUT_MS)
-    for (let index = 0; index < bundle.progress.length; index++) {
-      const record = bundle.progress[index]
+    // Simkl has no bulk playback write. Submit every pause with its own bounded
+    // request and keep going after an individual rejection. Oldest-first order
+    // ensures Simkl's one-session-per-title model retains the newest pause.
+    const records = [...bundle.progress].sort((left, right) => left.updatedAt - right.updatedAt)
+    for (const record of records) {
       const percentage = progressPercentage(record)
-      const ids = simklWriteIds(record.media)
-      const parsedVideoId = parseStremioVideoId(record.media.videoId)
-      const season = Number.isInteger(record.media.season)
-        ? Number(record.media.season)
-        : parsedVideoId?.season
-      const episode = Number.isInteger(record.media.episode)
-        ? Number(record.media.episode)
-        : parsedVideoId?.episode
+      const media = enrichMediaFromSimklSnapshot(connection, record.media)
+      const resolution = resolveSimklEpisodeWrite(media)
+      const subject = simklSubject(media, resolution.ids)
 
       if (!percentage) {
         skipped.progress = (skipped.progress || 0) + 1
@@ -3851,30 +4404,31 @@ async function pushSimkl(options: PushOptions): Promise<PushResult> {
         })
         continue
       }
-      if (!ids) {
+      if (!subject) {
         skipped.progress = (skipped.progress || 0) + 1
         issues.push({
           scope: 'progress',
           status: 'unresolved',
           media: record.media,
-          reason: 'Simkl progress needs a supported external ID.'
+          reason: 'Simkl progress needs a supported external ID or a title.'
         })
         continue
       }
 
-      const subject = {
-        title: record.media.title,
-        year: record.media.year,
-        ids
-      }
       const payload: any = {
-        progress: Math.round(Math.min(100, percentage) * 10) / 10
+        progress: Math.round(Math.min(100, percentage) * 100) / 100
       }
-      if (record.media.kind === 'movie') {
+      if (media.kind === 'movie') {
         payload.movie = subject
-      } else if (Number.isInteger(season) && Number.isInteger(episode)) {
+      } else if (resolution.nativeAnime && Number.isInteger(resolution.episode)) {
+        payload.anime = subject
+        payload.episode = { number: Number(resolution.episode) }
+      } else if (Number.isInteger(resolution.season) && Number.isInteger(resolution.episode)) {
         payload.show = subject
-        payload.episode = { season, number: episode }
+        payload.episode = {
+          season: Number(resolution.season),
+          number: Number(resolution.episode)
+        }
       } else {
         skipped.progress = (skipped.progress || 0) + 1
         issues.push({
@@ -3889,28 +4443,19 @@ async function pushSimkl(options: PushOptions): Promise<PushResult> {
       try {
         await simklRequest(connection, '/scrobble/pause', {}, {
           method: 'POST',
-          body: JSON.stringify(payload),
-          signal
+          body: JSON.stringify(payload)
         })
         written.progress++
       } catch (error: any) {
-        if (signal.aborted || error?.name === 'TimeoutError' || error?.name === 'AbortError') {
-          const remaining = bundle.progress.length - index
-          skipped.progress = (skipped.progress || 0) + remaining
-          issues.push({
-            scope: 'progress',
-            status: 'note',
-            reason: `Simkl Continue Watching import stopped after 30 seconds; ${remaining} resume point${remaining === 1 ? '' : 's'} were skipped.`
-          })
-          break
-        }
-        if (![400, 404, 409, 422, 429].includes(Number(error?.status))) throw error
+        if ([401, 403].includes(Number(error?.status))) throw error
         skipped.progress = (skipped.progress || 0) + 1
         issues.push({
           scope: 'progress',
           status: 'unresolved',
           media: record.media,
-          reason: `Simkl rejected this resume point: ${errorDetail(error.body, error.message)}`
+          reason: error?.name === 'TimeoutError' || error?.name === 'AbortError'
+            ? 'This Simkl resume point did not finish before its individual request deadline.'
+            : `Simkl rejected this resume point: ${errorDetail(error.body, error.message)}`
         })
       }
     }
@@ -5242,6 +5787,16 @@ async function traktTargetEpisodes(
   }
 }
 
+function simklTargetEpisodes(connection: BridgeConnection, media: MediaRef): EpisodeRef[] {
+  const cache = simklEpisodeCatalogCaches.get(simklCacheAccountKey(connection))
+  if (!cache) return []
+  const enriched = enrichMediaFromSimklSnapshot(connection, media)
+  const catalogs = [...new Set(
+    simklSnapshotLookupKeys(enriched).map(key => cache.get(key)).filter(Boolean)
+  )] as EpisodeRef[][]
+  return mergeSimklEpisodeCatalogs(catalogs)
+}
+
 async function targetEpisodesFor(
   connection: BridgeConnection,
   media: MediaRef,
@@ -5252,6 +5807,7 @@ async function targetEpisodesFor(
   }
   if (connection.service === 'nuvio') return nuvioTargetEpisodes(connection, media, sourceEpisodes)
   if (connection.service === 'trakt') return traktTargetEpisodes(connection, media)
+  if (connection.service === 'simkl') return simklTargetEpisodes(connection, media)
   if (connection.service === 'plex') return plexTargetEpisodes(connection, media)
   if (connection.service === 'jellyfin') return jellyfinTargetEpisodes(connection, media)
   return []
@@ -5308,7 +5864,7 @@ export async function inspectDestinationMappings(
   log?: BridgeLog,
   sourceConnection?: BridgeConnection
 ): Promise<DestinationMappingIssue[]> {
-  if (!['stremio', 'nuvio', 'trakt', 'plex', 'jellyfin'].includes(connection.service)) return []
+  if (!['stremio', 'nuvio', 'trakt', 'simkl', 'plex', 'jellyfin'].includes(connection.service)) return []
   const selectedRecords: Array<{
     scope: 'history' | 'progress'
     media: MediaRef
@@ -5320,6 +5876,13 @@ export async function inspectDestinationMappings(
   const recordsByKey = new Map<string, typeof selectedRecords[number]>()
   for (const record of selectedRecords) {
     if (record.media.kind !== 'series') continue
+    const parsedVideo = parseStremioVideoId(record.media.videoId)
+    const parsedAnimeVideo = parseSimklAnimeVideoId(record.media.videoId)
+    const hasExplicitCoordinates = Number.isInteger(record.media.season)
+      && Number.isInteger(record.media.episode)
+    // Completed-series markers are a first-class Nuvio/Simkl state. They have
+    // no episode to remap and must pass through unchanged.
+    if (!hasExplicitCoordinates && !parsedVideo && !parsedAnimeVideo) continue
     const identity = canonicalEpisodeKey(record.media)
       || mediaAliasKeys(record.media)[0]
       || [
@@ -5348,9 +5911,15 @@ export async function inspectDestinationMappings(
     const sourceEpisodes = sourceConnection
       ? await targetEpisodesFor(sourceConnection, record.media)
       : []
+    const parsedVideo = parseStremioVideoId(record.media.videoId)
+    const parsedAnimeVideo = parseSimklAnimeVideoId(record.media.videoId)
     const requested: EpisodeRef = {
-      season: Number(record.media.season),
-      episode: Number(record.media.episode),
+      season: Number.isInteger(record.media.season)
+        ? Number(record.media.season)
+        : parsedVideo?.season ?? (parsedAnimeVideo ? 0 : Number.NaN),
+      episode: Number.isInteger(record.media.episode)
+        ? Number(record.media.episode)
+        : parsedVideo?.episode ?? parsedAnimeVideo?.episode ?? Number.NaN,
       absoluteEpisode: record.media.absoluteEpisode,
       title: record.media.episodeTitle,
       videoId: record.media.videoId
@@ -5382,6 +5951,30 @@ export async function inspectDestinationMappings(
           fallbackTargets,
           mappingOptions
         )
+      }
+    }
+    // Simkl's official resolver can still match the write directly by IDs or
+    // title/year. Its cached catalog is an enrichment path, not a reason to
+    // reject a record when no deterministic episode projection is available.
+    if (connection.service === 'simkl' && (!targets.length || mapping?.status !== 'mapped')) {
+      return null
+    }
+    if (
+      connection.service === 'simkl'
+      && mapping?.status === 'mapped'
+      && !parseSimklAnimeVideoId(record.media.videoId)
+    ) {
+      // Keep Nuvio's original TV-style catalog identity. The destination
+      // catalog still supplies corrected S/E coordinates, but replacing a
+      // parent IMDb/TVDB video ID with Simkl's native MAL/Kitsu episode ID
+      // would incorrectly switch the mutation to flat-anime mode.
+      mapping = {
+        ...mapping,
+        target: {
+          ...mapping.target,
+          videoId: record.media.videoId,
+          contentId: record.media.destinationContentId
+        }
       }
     }
     if (!targets.length) {

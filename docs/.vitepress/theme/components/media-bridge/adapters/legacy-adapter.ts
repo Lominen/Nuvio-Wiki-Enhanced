@@ -1,5 +1,6 @@
 import {
   SERVICE_DEFINITIONS,
+  mediaAliasKeys,
   type BridgeScope,
   type MediaRef,
   type ServiceId
@@ -41,9 +42,32 @@ function issueForMedia(
   return issues.find(issue => (
     issue.scope === scope
     && issue.media
-    && canonicalIdentityKey(issue.media) === key
+    && issueMediaMatches(issue.media, media, key)
     && issue.status !== 'note'
   ))
+}
+
+function issueMediaMatches(issueMedia: MediaRef, media: MediaRef, mediaKey: string | null): boolean {
+  if (canonicalIdentityKey(issueMedia) === mediaKey) return true
+  if (issueMedia.kind !== media.kind) return false
+  const issueAliases = new Set(mediaAliasKeys(issueMedia))
+  if (!mediaAliasKeys(media).some(alias => issueAliases.has(alias))) return false
+  if (media.kind === 'movie') return true
+
+  const sourceVideoId = String(media.videoId || '').trim()
+  const issueVideoId = String(issueMedia.videoId || '').trim()
+  if (sourceVideoId && issueVideoId && sourceVideoId === issueVideoId) return true
+  if (
+    Number.isInteger(media.season)
+    && Number.isInteger(media.episode)
+    && Number.isInteger(issueMedia.season)
+    && Number.isInteger(issueMedia.episode)
+  ) {
+    return media.season === issueMedia.season && media.episode === issueMedia.episode
+  }
+  return issueMedia.season === undefined
+    && issueMedia.episode === undefined
+    && !issueVideoId
 }
 
 function receiptsFor(
