@@ -101,6 +101,111 @@ test('deduplicates repeated IDs and writes all aliases in one batch', async () =
   assert.equal(cache.values.has('movie:imdb:tt0000099'), true);
 });
 
+test('coalesces TMDB-only, IMDb-only, and bridge items into one identity task', async () => {
+  const cache = createMemoryCache();
+  const fetched = [];
+  const enricher = createMetadataEnricher({
+    cache,
+    fetchMetadata: async item => {
+      fetched.push({ tmdbId: item.tmdbId, imdbId: item.imdbId });
+      return {
+        posterUrl: 'transitive-poster',
+        source: 'tmdb',
+        resolvedTmdbId: item.tmdbId,
+        resolvedImdbId: item.imdbId
+      };
+    }
+  });
+
+  const output = await enricher.enrich([
+    { content_id: 'tmdb-only', content_type: 'movie', _ids: { tmdb: 550 } },
+    { content_id: 'imdb-only', content_type: 'movie', _ids: { imdb: 'tt0137523' } },
+    {
+      content_id: 'bridge-last',
+      content_type: 'movie',
+      _ids: { tmdb: 550, imdb: 'tt0137523' }
+    }
+  ]);
+
+  assert.deepEqual(fetched, [{ tmdbId: '550', imdbId: 'tt0137523' }]);
+  assert.equal(output.summary.uniqueFetches, 1);
+  assert.deepEqual(
+    output.results.map(result => [result.tmdbId, result.imdbId, result.posterUrl]),
+    Array.from({ length: 3 }, () => ['550', 'tt0137523', 'transitive-poster'])
+  );
+  assert.equal(cache.values.has('movie:tmdb:550'), true);
+  assert.equal(cache.values.has('movie:imdb:tt0137523'), true);
+});
+
+test('does not cross-cache aliases shared by conflicting identifier pairs', async () => {
+  const cache = createMemoryCache();
+  let fetches = 0;
+  const enricher = createMetadataEnricher({
+    cache,
+    concurrency: 3,
+    fetchMetadata: async item => {
+      fetches++;
+      if (item.imdbId === 'tt0000001') {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      return {
+        posterUrl: `poster-${item.imdbId || 'tmdb'}`,
+        source: 'tmdb',
+        resolvedTmdbId: item.tmdbId,
+        resolvedImdbId: item.imdbId
+      };
+    }
+  });
+
+  const output = await enricher.enrich([
+    {
+      content_id: 'pair-a',
+      content_type: 'movie',
+      _ids: { tmdb: 42, imdb: 'tt0000001' }
+    },
+    {
+      content_id: 'pair-b',
+      content_type: 'movie',
+      _ids: { tmdb: 42, imdb: 'tt0000002' }
+    },
+    { content_id: 'ambiguous-tmdb', content_type: 'movie', _ids: { tmdb: 42 } }
+  ]);
+
+  assert.equal(fetches, 3);
+  assert.equal(output.summary.uniqueFetches, 3);
+  assert.equal(cache.values.has('movie:tmdb:42'), false);
+  assert.equal(cache.values.get('movie:imdb:tt0000001')?.posterUrl, 'poster-tt0000001');
+  assert.equal(cache.values.get('movie:imdb:tt0000002')?.posterUrl, 'poster-tt0000002');
+
+  await enricher.enrich([
+    { content_id: 'tmdb-retry', content_type: 'movie', _ids: { tmdb: 42 } }
+  ]);
+  assert.equal(fetches, 4);
+});
+
+test('does not cache a supplied alias contradicted by the resolved identity', async () => {
+  const cache = createMemoryCache();
+  const enricher = createMetadataEnricher({
+    cache,
+    fetchMetadata: async item => ({
+      source: 'tmdb',
+      resolvedTmdbId: item.tmdbId,
+      resolvedImdbId: 'tt7654321'
+    })
+  });
+
+  const output = await enricher.enrich([{
+    content_id: 'bad-pair',
+    content_type: 'movie',
+    _ids: { tmdb: 777, imdb: 'tt1234567' }
+  }]);
+
+  assert.equal(output.results[0].imdbId, 'tt7654321');
+  assert.equal(cache.values.has('movie:tmdb:777'), true);
+  assert.equal(cache.values.has('movie:imdb:tt7654321'), true);
+  assert.equal(cache.values.has('movie:imdb:tt1234567'), false);
+});
+
 test('returns and caches the corresponding IMDb ID for a TMDB-only item', async () => {
   const cache = createMemoryCache();
   const enricher = createMetadataEnricher({

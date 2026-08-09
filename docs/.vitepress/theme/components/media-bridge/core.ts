@@ -174,6 +174,8 @@ export interface MediaRef {
   videoId?: string
   /** Provider-native content identity selected while remapping an episode. */
   destinationContentId?: string
+  /** Prevents alias cleanup at destination coordinates after an episode remap. */
+  destinationEpisodeRemapped?: boolean
 }
 
 export interface RecordProvenance {
@@ -573,10 +575,23 @@ export function mediaAliasKeys(media: MediaRef): string[] {
   const destinationContentId = normalizedStremioContentId(media.destinationContentId)
     .toLocaleLowerCase('en-US')
   if (destinationContentId) {
-    const namespace = normalizeImdbId(destinationContentId) ? 'imdb' : 'stremio'
-    const value = namespace === 'imdb' ? normalizeImdbId(destinationContentId) : destinationContentId
-    if (!canonicalIds.some(alias => alias[0] === namespace && alias[1] === value)) {
-      canonicalIds.push([namespace, value])
+    const standard = /^(tmdb|tvdb|trakt|simkl):(\d+)$/i.exec(destinationContentId)
+    const namespace = normalizeImdbId(destinationContentId)
+      ? 'imdb'
+      : standard?.[1]?.toLocaleLowerCase('en-US') || 'stremio'
+    const value = namespace === 'imdb'
+      ? normalizeImdbId(destinationContentId)
+      : standard
+        ? normalizeNumericId(standard[2])
+        : destinationContentId
+    const existingIndex = canonicalIds.findIndex(alias => alias[0] === namespace && alias[1] === value)
+    if (existingIndex >= 0) {
+      canonicalIds.unshift(...canonicalIds.splice(existingIndex, 1))
+    } else {
+      // Once an episode has been remapped, its destination-native owner must
+      // be canonical. Related Kitsu installments can reuse local S/E numbers;
+      // leaving the source IMDb first would collapse distinct watched rows.
+      canonicalIds.unshift([namespace, value])
     }
   }
   const aliases = canonicalIds.map(
@@ -867,7 +882,11 @@ function sortedEpisodes(episodes: readonly EpisodeRef[]): EpisodeRef[] {
   return [...episodes].sort(episodeSort)
 }
 
+const regularEpisodeSequenceCache = new WeakMap<readonly EpisodeRef[], EpisodeRef[]>()
+
 function normalizedRegularEpisodeSequence(episodes: readonly EpisodeRef[]): EpisodeRef[] {
+  const cached = regularEpisodeSequenceCache.get(episodes)
+  if (cached) return cached
   const seen = new Set<string>()
   const ordered = episodes.every(episode => (
     Number.isInteger(episode.sequenceIndex) && Number(episode.sequenceIndex) >= 0
@@ -876,7 +895,7 @@ function normalizedRegularEpisodeSequence(episodes: readonly EpisodeRef[]): Epis
         Number(left.sequenceIndex) - Number(right.sequenceIndex) || episodeSort(left, right)
       ))
     : sortedEpisodes(episodes)
-  return ordered
+  const normalized = ordered
     .filter(episode => episode.season > 0 && episode.episode > 0)
     .filter(episode => {
       const videoId = String(episode.videoId || '').trim()
@@ -889,18 +908,70 @@ function normalizedRegularEpisodeSequence(episodes: readonly EpisodeRef[]): Epis
       seen.add(key)
       return true
     })
+  regularEpisodeSequenceCache.set(episodes, normalized)
+  return normalized
 }
 
+const meaningfulEpisodeTitleCache = new Map<string, string>()
+const MEANINGFUL_EPISODE_TITLE_CACHE_LIMIT = 10_000
+
 function meaningfulEpisodeTitle(value: unknown): string {
-  const normalized = normalizeTitle(value)
-  if (!normalized || /^(episode|ep|e|chapter|aflevering)\s*\d+$/.test(normalized)) return ''
-  return normalized
+  const raw = String(value ?? '')
+  const cached = meaningfulEpisodeTitleCache.get(raw)
+  if (cached !== undefined) return cached
+  const normalized = normalizeTitle(raw)
+  const meaningful = !normalized || /^(episode|ep|e|chapter|aflevering)\s*\d+$/.test(normalized)
+    ? ''
+    : normalized
+  if (meaningfulEpisodeTitleCache.size >= MEANINGFUL_EPISODE_TITLE_CACHE_LIMIT) {
+    meaningfulEpisodeTitleCache.clear()
+  }
+  meaningfulEpisodeTitleCache.set(raw, meaningful)
+  return meaningful
+}
+
+interface EpisodeCatalogLookup {
+  byVideoId: Map<string, EpisodeRef[]>
+  byCoordinate: Map<string, EpisodeRef[]>
+  byAbsolute: Map<number, EpisodeRef[]>
+  byTitle: Map<string, EpisodeRef[]>
+}
+
+const episodeCatalogLookupCache = new WeakMap<readonly EpisodeRef[], EpisodeCatalogLookup>()
+
+function coordinateKey(season: number, episode: number): string {
+  return `${season}:${episode}`
+}
+
+function episodeCatalogLookup(episodes: readonly EpisodeRef[]): EpisodeCatalogLookup {
+  const cached = episodeCatalogLookupCache.get(episodes)
+  if (cached) return cached
+  const lookup: EpisodeCatalogLookup = {
+    byVideoId: new Map(),
+    byCoordinate: new Map(),
+    byAbsolute: new Map(),
+    byTitle: new Map()
+  }
+  const add = <K>(index: Map<K, EpisodeRef[]>, key: K, episode: EpisodeRef) => {
+    const matches = index.get(key) || []
+    matches.push(episode)
+    index.set(key, matches)
+  }
+  for (const episode of episodes) {
+    if (episode.videoId) add(lookup.byVideoId, episode.videoId, episode)
+    add(lookup.byCoordinate, coordinateKey(episode.season, episode.episode), episode)
+    if (validEpisode(episode.absoluteEpisode)) {
+      add(lookup.byAbsolute, episode.absoluteEpisode, episode)
+    }
+    const title = meaningfulEpisodeTitle(episode.title)
+    if (title) add(lookup.byTitle, title, episode)
+  }
+  episodeCatalogLookupCache.set(episodes, lookup)
+  return lookup
 }
 
 const FUZZY_TITLE_THRESHOLD = 0.94
 const SEQUENCE_TITLE_THRESHOLD = 0.72
-const SAME_INDEX_MIN_CATALOG_SIZE = 12
-const SAME_INDEX_MAX_CATALOG_DELTA_RATIO = 0.06
 
 function fuzzyTitleEligible(title: string): boolean {
   return title.length >= 12 && title.split(' ').filter(Boolean).length >= 3
@@ -973,7 +1044,11 @@ function fuzzyEpisodeTitleMatches(
     ))
 }
 
+const uniqueTitleIndexCache = new WeakMap<readonly EpisodeRef[], Map<string, number>>()
+
 function uniqueTitleIndexes(episodes: readonly EpisodeRef[]): Map<string, number> {
+  const cached = uniqueTitleIndexCache.get(episodes)
+  if (cached) return cached
   const occurrences = new Map<string, number[]>()
   episodes.forEach((episode, index) => {
     const title = meaningfulEpisodeTitle(episode.title)
@@ -986,6 +1061,7 @@ function uniqueTitleIndexes(episodes: readonly EpisodeRef[]): Map<string, number
   for (const [title, indexes] of occurrences) {
     if (indexes.length === 1) unique.set(title, indexes[0])
   }
+  uniqueTitleIndexCache.set(episodes, unique)
   return unique
 }
 
@@ -1046,31 +1122,42 @@ function anchoredSequenceCandidate(
   return { candidate, anchors: [before, after], titleSimilarity }
 }
 
+const seasonStructureCache = new WeakMap<readonly EpisodeRef[], string>()
+
+function seasonStructure(episodes: readonly EpisodeRef[]): string {
+  const cached = seasonStructureCache.get(episodes)
+  if (cached !== undefined) return cached
+  const counts = new Map<number, number>()
+  for (const episode of normalizedRegularEpisodeSequence(episodes)) {
+    counts.set(episode.season, (counts.get(episode.season) || 0) + 1)
+  }
+  const structure = [...counts]
+    .sort(([left], [right]) => left - right)
+    .map(([season, count]) => `${season}:${count}`)
+    .join('|')
+  seasonStructureCache.set(episodes, structure)
+  return structure
+}
+
+function hasSameSeasonStructure(
+  sourceEpisodes: readonly EpisodeRef[],
+  targetEpisodes: readonly EpisodeRef[]
+): boolean {
+  return seasonStructure(sourceEpisodes) === seasonStructure(targetEpisodes)
+}
+
 function sameIndexSequenceCandidate(
   source: EpisodeRef,
   sourceEpisodes: readonly EpisodeRef[],
   targetEpisodes: readonly EpisodeRef[]
 ): { candidate: EpisodeRef | null; titleSimilarity?: number | null } {
   // Nuvio's native TraktEpisodeMapping falls back to the same position in the
-  // two season/episode-sorted catalogs. Keep that behavior for substantial,
-  // similarly sized catalogs after specials and duplicate addon rows have
-  // been removed. Small or materially divergent catalogs remain unresolved.
+  // two season/episode-sorted catalogs whenever their per-season structures
+  // differ. The caller only enables this fallback for that condition. An
+  // incomplete destination remains safe because an out-of-range source index
+  // cannot produce a candidate.
   const orderedSource = normalizedRegularEpisodeSequence(sourceEpisodes)
   const orderedTarget = normalizedRegularEpisodeSequence(targetEpisodes)
-  const explicitlyOrderedTarget = orderedTarget.length > 0 && orderedTarget.every(episode => (
-    Number.isInteger(episode.sequenceIndex) && Number(episode.sequenceIndex) >= 0
-  ))
-  if (
-    !explicitlyOrderedTarget
-    && (
-      orderedSource.length < SAME_INDEX_MIN_CATALOG_SIZE
-      || orderedTarget.length < SAME_INDEX_MIN_CATALOG_SIZE
-    )
-  ) return { candidate: null }
-
-  const catalogDeltaRatio = Math.abs(orderedSource.length - orderedTarget.length)
-    / Math.max(orderedSource.length, orderedTarget.length)
-  if (catalogDeltaRatio > SAME_INDEX_MAX_CATALOG_DELTA_RATIO) return { candidate: null }
 
   const sourceIndex = orderedSource.indexOf(source)
   if (sourceIndex < 0 || sourceIndex >= orderedTarget.length) return { candidate: null }
@@ -1127,25 +1214,26 @@ function resolveSourceEpisode(
   sourceEpisodes: readonly EpisodeRef[]
 ): EpisodeRef | MappingOutcome {
   if (!sourceEpisodes.length) return requested
+  const lookup = episodeCatalogLookup(sourceEpisodes)
 
   if (requested.videoId) {
-    const matches = sourceEpisodes.filter(item => item.videoId === requested.videoId)
+    const matches = lookup.byVideoId.get(requested.videoId) || []
     if (matches.length === 1) return matches[0]
     if (matches.length > 1) {
       return ambiguous('exact', matches, 'The source video ID identifies more than one episode.')
     }
   }
 
-  const coordinates = sourceEpisodes.filter(item => (
-    item.season === requested.season && item.episode === requested.episode
-  ))
+  const coordinates = lookup.byCoordinate.get(
+    coordinateKey(requested.season, requested.episode)
+  ) || []
   if (coordinates.length === 1) return coordinates[0]
   if (coordinates.length > 1) {
     return ambiguous('high', coordinates, 'The source season and episode identify more than one episode.')
   }
 
   if (validEpisode(requested.absoluteEpisode)) {
-    const absoluteMatches = sourceEpisodes.filter(item => item.absoluteEpisode === requested.absoluteEpisode)
+    const absoluteMatches = lookup.byAbsolute.get(requested.absoluteEpisode) || []
     if (absoluteMatches.length === 1) return absoluteMatches[0]
     if (absoluteMatches.length > 1) {
       return ambiguous('medium', absoluteMatches, 'The source absolute number identifies more than one episode.')
@@ -1154,7 +1242,7 @@ function resolveSourceEpisode(
 
   const title = meaningfulEpisodeTitle(requested.title)
   if (title) {
-    const titleMatches = sourceEpisodes.filter(item => meaningfulEpisodeTitle(item.title) === title)
+    const titleMatches = lookup.byTitle.get(title) || []
     if (titleMatches.length === 1) return titleMatches[0]
     if (titleMatches.length > 1) {
       return ambiguous('high', titleMatches, 'The source title identifies more than one episode.')
@@ -1167,7 +1255,8 @@ function resolveSourceEpisode(
 export function remapEpisode(
   requested: EpisodeRef,
   sourceEpisodes: readonly EpisodeRef[],
-  targetEpisodes: readonly EpisodeRef[]
+  targetEpisodes: readonly EpisodeRef[],
+  options: { allowUnanchoredSameIndex?: boolean } = {}
 ): MappingOutcome {
   const baseEvidence = {
     requested: { ...requested },
@@ -1196,25 +1285,35 @@ export function remapEpisode(
   }
   const source = resolvedSource
   const sourceTitle = meaningfulEpisodeTitle(source.title)
+  const normalizedSourceEpisodes = normalizedRegularEpisodeSequence(sourceEpisodes)
+  const normalizedTargetEpisodes = normalizedRegularEpisodeSequence(targetEpisodes)
   const explicitlyOrderedTarget = targetEpisodes.some(episode => (
     Number.isInteger(episode.sequenceIndex) && Number(episode.sequenceIndex) >= 0
   ))
+  const requiresSequenceRemap = explicitlyOrderedTarget
+    || (
+      options.allowUnanchoredSameIndex === true
+      && normalizedSourceEpisodes.length > 1
+      && !hasSameSeasonStructure(sourceEpisodes, targetEpisodes)
+    )
+  const canUseSequenceFallback = requiresSequenceRemap
+    && normalizedSourceEpisodes.length > 1
+    && normalizedTargetEpisodes.length > 1
+  const targetLookup = episodeCatalogLookup(targetEpisodes)
   const videoIdMatches = source.videoId
-    ? targetEpisodes.filter(item => item.videoId === source.videoId)
+    ? targetLookup.byVideoId.get(source.videoId) || []
     : []
   // Related Kitsu installments restart local season/episode and absolute
   // numbering. Their explicit global sequence is authoritative; comparing the
   // local coordinates across installments creates duplicate false matches.
-  const coordinateMatches = explicitlyOrderedTarget
+  const coordinateMatches = requiresSequenceRemap
     ? []
-    : targetEpisodes.filter(item => (
-        item.season === source.season && item.episode === source.episode
-      ))
+    : targetLookup.byCoordinate.get(coordinateKey(source.season, source.episode)) || []
   const absoluteMatches = !explicitlyOrderedTarget && validEpisode(source.absoluteEpisode)
-    ? targetEpisodes.filter(item => item.absoluteEpisode === source.absoluteEpisode)
+    ? targetLookup.byAbsolute.get(source.absoluteEpisode) || []
     : []
   const titleMatches = sourceTitle
-    ? targetEpisodes.filter(item => meaningfulEpisodeTitle(item.title) === sourceTitle)
+    ? targetLookup.byTitle.get(sourceTitle) || []
     : []
   const evidence: EpisodeMappingEvidence = {
     ...baseEvidence,
@@ -1270,7 +1369,7 @@ export function remapEpisode(
       }
     }
 
-    if (titleMatches.length > 1 && !explicitlyOrderedTarget) {
+    if (titleMatches.length > 1 && !canUseSequenceFallback) {
       return {
         ...ambiguous('high', titleMatches, 'The normalized episode title matches multiple destination episodes.'),
         evidence
@@ -1295,7 +1394,7 @@ export function remapEpisode(
       evidence: fuzzyEvidence
     }
   }
-  if (fuzzyTitleMatches.length > 1 && !explicitlyOrderedTarget) {
+  if (fuzzyTitleMatches.length > 1 && !canUseSequenceFallback) {
     return {
       ...ambiguous(
         'high',
@@ -1334,7 +1433,9 @@ export function remapEpisode(
 
   // Conflicting anchors are evidence that the catalogs diverge at this point,
   // so only apply Nuvio's same-index fallback when no anchors were found.
-  const sameIndex: { candidate: EpisodeRef | null; titleSimilarity?: number | null } = sequence.anchors.length
+  const sameIndex: { candidate: EpisodeRef | null; titleSimilarity?: number | null } = (
+    !canUseSequenceFallback || sequence.anchors.length
+  )
     ? { candidate: null }
     : sameIndexSequenceCandidate(source, sourceEpisodes, targetEpisodes)
   if (sameIndex.candidate) {

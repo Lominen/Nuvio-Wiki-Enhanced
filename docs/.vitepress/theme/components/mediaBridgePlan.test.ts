@@ -835,11 +835,107 @@ test('applies a deterministic episode remap before comparison and transfer', () 
   assert.equal(plan.stats.remapped, 1)
   assert.equal(plan.transfer.history[0].media.season, 4)
   assert.equal(plan.transfer.history[0].media.episode, 8)
+  assert.equal(plan.transfer.history[0].media.destinationEpisodeRemapped, true)
   assert.equal(plan.rows[0].remapped, true)
   assert.equal(plan.rows[0].mappingConfidence, 'medium')
   assert.equal(plan.rows[0].title, 'Remapped Show')
   assert.match(plan.rows[0].outcomeLabel, /remapped/)
   assert.notEqual(plan.rows[0].sourceKey, plan.rows[0].targetKey)
+})
+
+test('matches a remapped Kitsu installment to an existing Nuvio episode without a year', () => {
+  const source = createEmptyBundle()
+  const destination = createEmptyBundle()
+  const sourceMedia = episode('tt11126994', 'Arcane', 2, 1)
+  source.history.push({ media: sourceMedia, watchedAt: 500 })
+  destination.history.push({
+    media: {
+      kind: 'series',
+      ids: { stremio: 'kitsu:45515' },
+      title: 'Arcane Season 2',
+      season: 1,
+      episode: 1,
+      episodeTitle: 'Heavy Is the Crown',
+      videoId: 'kitsu:45515:1:1'
+    },
+    watchedAt: 500
+  })
+
+  const plan = planMediaBridgePreview({
+    source,
+    destination,
+    destinationService: 'nuvio',
+    scopes: ALL_SCOPES,
+    mappingIssues: [{
+      scope: 'history',
+      sourceMedia,
+      mapping: {
+        status: 'mapped',
+        confidence: 'high',
+        target: {
+          season: 1,
+          episode: 1,
+          title: 'Heavy Is the Crown',
+          videoId: 'kitsu:45515:1:1',
+          contentId: 'kitsu:45515'
+        },
+        candidates: [{
+          season: 1,
+          episode: 1,
+          title: 'Heavy Is the Crown',
+          videoId: 'kitsu:45515:1:1',
+          contentId: 'kitsu:45515'
+        }],
+        reason: 'The episode belongs to the second Kitsu installment.'
+      }
+    }]
+  })
+
+  assert.equal(plan.stats.source, 1)
+  assert.equal(plan.stats.alreadyPresent, 1)
+  assert.equal(plan.stats.add, 0)
+  assert.equal(plan.stats.update, 0)
+  assert.equal(plan.transfer.history.length, 0)
+  assert.equal(plan.rows[0].outcome, 'already-present')
+  assert.match(plan.rows[0].targetKey || '', /kitsu%3A45515/)
+})
+
+test('keeps remapped Kitsu installments with shared source coordinates distinct', () => {
+  const source = createEmptyBundle()
+  source.history.push(
+    {
+      media: {
+        ...episode('tt11126994', 'Arcane', 1, 1),
+        destinationContentId: 'kitsu:45469',
+        videoId: 'kitsu:45469:1:1'
+      },
+      watchedAt: 500
+    },
+    {
+      media: {
+        ...episode('tt11126994', 'Arcane Season 2', 1, 1),
+        destinationContentId: 'kitsu:45515',
+        videoId: 'kitsu:45515:1:1'
+      },
+      watchedAt: 600
+    }
+  )
+
+  const plan = planMediaBridgePreview({
+    source,
+    destination: createEmptyBundle(),
+    destinationService: 'nuvio',
+    scopes: ALL_SCOPES
+  })
+
+  assert.equal(plan.stats.source, 2)
+  assert.equal(plan.stats.add, 2)
+  assert.equal(plan.transfer.history.length, 2)
+  assert.deepEqual(
+    new Set(plan.transfer.history.map(record => record.media.destinationContentId)),
+    new Set(['kitsu:45469', 'kitsu:45515'])
+  )
+  assert.equal(new Set(plan.rows.map(row => row.targetKey)).size, 2)
 })
 
 test('shows the accepted sequence candidate and low title similarity in diagnostics', () => {
@@ -922,7 +1018,12 @@ test('identifies Nuvio-compatible same-index fallback in diagnostics', () => {
     videoId: sourceEpisodes[5].videoId
   }
   source.history.push({ media: sourceMedia, watchedAt: 500 })
-  const mapping = remapEpisode(sourceEpisodes[5], sourceEpisodes, destinationEpisodes)
+  const mapping = remapEpisode(
+    sourceEpisodes[5],
+    sourceEpisodes,
+    destinationEpisodes,
+    { allowUnanchoredSameIndex: true }
+  )
   const plan = planMediaBridgePreview({
     source,
     destination: createEmptyBundle(),

@@ -232,7 +232,13 @@ function cloneMediaWithMapping(media: MediaRef, mapping: MappingOutcome): MediaR
     absoluteEpisode: mapping.target.absoluteEpisode ?? media.absoluteEpisode,
     episodeTitle: mapping.target.title || media.episodeTitle,
     videoId: mapping.target.videoId || media.videoId,
-    destinationContentId: mapping.target.contentId || media.destinationContentId
+    destinationContentId: mapping.target.contentId || media.destinationContentId,
+    destinationEpisodeRemapped: Boolean(
+      media.destinationEpisodeRemapped
+      || mapping.target.contentId
+      || mapping.target.season !== media.season
+      || mapping.target.episode !== media.episode
+    )
   }
 }
 

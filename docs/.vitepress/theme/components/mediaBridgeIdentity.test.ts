@@ -135,3 +135,69 @@ test('keeps episode identities under their parent show aliases', () => {
   const second = { ...first, ids: { ...first.ids }, episode: 2 }
   assert.notEqual(canonicalIdentityKey(first), canonicalIdentityKey(second))
 })
+
+test('treats a namespaced destination content ID as the native provider identity', () => {
+  const mapped: MediaRef = {
+    kind: 'series',
+    ids: { imdb: 'tt0944947' },
+    destinationContentId: 'tmdb:1399',
+    season: 1,
+    episode: 1
+  }
+  const freshlyPulled: MediaRef = {
+    kind: 'series',
+    ids: { tmdb: 1399, stremio: 'tmdb:1399' },
+    season: 1,
+    episode: 1
+  }
+
+  assert.deepEqual(identityAliasKeys(mapped), [
+    'series:tmdb:1399:season:1:episode:1',
+    'series:imdb:tt0944947:season:1:episode:1'
+  ])
+  assert.equal(
+    canonicalIdentityKey(mapped),
+    'series:tmdb:1399:season:1:episode:1'
+  )
+
+  const result = coalesceMediaRefs([mapped, freshlyPulled])
+  assert.equal(result.conflicts.length, 0)
+  assert.deepEqual(result.keys, [
+    'series:tmdb:1399:season:1:episode:1',
+    'series:tmdb:1399:season:1:episode:1'
+  ])
+  assert.equal(result.media[0].ids.tmdb, 1399)
+  assert.equal(result.media[1].ids.imdb, 'tt0944947')
+})
+
+test('keeps remapped Kitsu installments distinct despite shared source IDs and coordinates', () => {
+  const firstInstallment: MediaRef = {
+    kind: 'series',
+    ids: { imdb: 'tt11126994', external: { kitsu: 45469 } },
+    destinationContentId: 'kitsu:45469',
+    season: 1,
+    episode: 1
+  }
+  const secondInstallment: MediaRef = {
+    ...firstInstallment,
+    ids: { ...firstInstallment.ids, external: { ...firstInstallment.ids.external } },
+    destinationContentId: 'kitsu:45515'
+  }
+
+  assert.equal(
+    canonicalIdentityKey(firstInstallment),
+    'series:stremio:kitsu%3A45469:season:1:episode:1'
+  )
+  assert.equal(
+    canonicalIdentityKey(secondInstallment),
+    'series:stremio:kitsu%3A45515:season:1:episode:1'
+  )
+
+  const result = coalesceMediaRefs([firstInstallment, secondInstallment])
+  assert.deepEqual(result.keys, [
+    'series:stremio:kitsu%3A45469:season:1:episode:1',
+    'series:stremio:kitsu%3A45515:season:1:episode:1'
+  ])
+  assert.equal(result.conflicts.length, 1)
+  assert.deepEqual(result.conflicts[0].namespaces, ['stremio'])
+})

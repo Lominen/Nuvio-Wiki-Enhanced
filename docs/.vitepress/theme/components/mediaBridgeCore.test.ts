@@ -231,8 +231,8 @@ test('exposes namespace-safe media and episode aliases for secondary-ID matching
     episode: 1
   }
   assert.deepEqual(mediaAliasKeys(remappedKitsu), [
-    'series:external:kitsu:45469',
-    'series:stremio:kitsu:45515'
+    'series:stremio:kitsu:45515',
+    'series:external:kitsu:45469'
   ])
   assert.ok(episodeAliasKeys(remappedKitsu).includes(
     'series:stremio:kitsu:45515:season:1:episode:1'
@@ -426,6 +426,38 @@ test('maps alternate anime numbering only with strong title or sequence evidence
   assert.match(anchoredDifferentTitle.reason, /confidence is reduced/)
 })
 
+test('keeps related Kitsu installments distinct when their local coordinates restart', () => {
+  const history = [
+    {
+      media: {
+        kind: 'series' as const,
+        ids: { imdb: 'tt11126994', external: { kitsu: 45469 } },
+        season: 1,
+        episode: 1,
+        destinationContentId: 'kitsu:45469'
+      },
+      watchedAt: 100
+    },
+    {
+      media: {
+        kind: 'series' as const,
+        ids: { imdb: 'tt11126994', external: { kitsu: 45469 } },
+        season: 1,
+        episode: 1,
+        destinationContentId: 'kitsu:45515'
+      },
+      watchedAt: 200
+    }
+  ]
+
+  const collapsed = collapseHistoryToWatchedState(history)
+  assert.equal(collapsed.length, 2)
+  assert.deepEqual(collapsed.map(record => canonicalEpisodeKey(record.media)).sort(), [
+    'series:stremio:kitsu:45469:season:1:episode:1',
+    'series:stremio:kitsu:45515:season:1:episode:1'
+  ])
+})
+
 test('maps a long anime sequence after excluding specials and duplicate addon episodes', () => {
   const sourceEpisodes: EpisodeRef[] = Array.from({ length: 23 }, (_, index) => ({
     season: 12,
@@ -473,7 +505,7 @@ test('maps a long anime sequence after excluding specials and duplicate addon ep
   )
 })
 
-test('uses Nuvio-compatible same-index mapping only for comparable long catalogs', () => {
+test('uses Nuvio-compatible same-index mapping when the caller explicitly enables it', () => {
   const narutoSource: EpisodeRef[] = Array.from({ length: 222 }, (_, index) => ({
     season: 2,
     episode: index + 1,
@@ -488,7 +520,12 @@ test('uses Nuvio-compatible same-index mapping only for comparable long catalogs
     title: `Kitsu Naruto installment ${index + 1}`,
     videoId: `kitsu:naruto:${index + 1}`
   }))
-  const naruto = remapEpisode(narutoSource[73], narutoSource, narutoTarget)
+  const naruto = remapEpisode(
+    narutoSource[73],
+    narutoSource,
+    narutoTarget,
+    { allowUnanchoredSameIndex: true }
+  )
 
   assert.equal(naruto.status, 'mapped')
   assert.equal(naruto.confidence, 'low')
@@ -511,7 +548,12 @@ test('uses Nuvio-compatible same-index mapping only for comparable long catalogs
     title: index === 54 ? 'Tokyo No. 1 Colony, Part 2' : `Kitsu Jujutsu installment ${index + 1}`,
     videoId: `kitsu:jujutsu:${index + 1}`
   }))
-  const jujutsu = remapEpisode(jujutsuSource[54], jujutsuSource, jujutsuTarget)
+  const jujutsu = remapEpisode(
+    jujutsuSource[54],
+    jujutsuSource,
+    jujutsuTarget,
+    { allowUnanchoredSameIndex: true }
+  )
 
   assert.equal(jujutsu.status, 'mapped')
   assert.equal(jujutsu.target?.videoId, 'kitsu:jujutsu:55')
@@ -531,7 +573,12 @@ test('uses Nuvio-compatible same-index mapping only for comparable long catalogs
     title: `Kitsu Bleach installment ${index + 1}`,
     videoId: `kitsu:bleach:${index + 1}`
   }))
-  const bleach = remapEpisode(bleachSource[398], bleachSource, bleachTarget)
+  const bleach = remapEpisode(
+    bleachSource[398],
+    bleachSource,
+    bleachTarget,
+    { allowUnanchoredSameIndex: true }
+  )
 
   assert.equal(bleach.status, 'unresolved')
   assert.equal(bleach.target, null)
@@ -585,7 +632,7 @@ test('maps short Kitsu installment catalogs as one explicitly ordered sequence',
   assert.equal(secondInstallment.evidence?.sequenceStrategy, 'same-index')
 })
 
-test('never guesses an episode by ordered position after deterministic matches fail', () => {
+test('keeps duplicate titles ambiguous but follows Nuvio same-index remapping for structural differences', () => {
   const duplicateTitle = remapEpisode(
     { season: 1, episode: 3, title: 'Finale' },
     [{ season: 1, episode: 3, title: 'Finale' }],
@@ -608,12 +655,13 @@ test('never guesses an episode by ordered position after deterministic matches f
     [
       { season: 4, episode: 7 },
       { season: 4, episode: 8 }
-    ]
+    ],
+    { allowUnanchoredSameIndex: true }
   )
-  assert.equal(ordinalOnly.status, 'unresolved')
-  assert.equal(ordinalOnly.confidence, 'none')
-  assert.equal(ordinalOnly.target, null)
-  assert.match(ordinalOnly.reason, /No deterministic episode mapping/)
+  assert.equal(ordinalOnly.status, 'mapped')
+  assert.equal(ordinalOnly.confidence, 'low')
+  assert.deepEqual(ordinalOnly.target, { season: 4, episode: 8 })
+  assert.equal(ordinalOnly.evidence?.sequenceStrategy, 'same-index')
   assert.equal(ordinalOnly.evidence?.sourceCatalogSize, 2)
   assert.equal(ordinalOnly.evidence?.destinationCatalogSize, 2)
   assert.deepEqual(ordinalOnly.evidence?.resolvedSource, {
@@ -623,6 +671,20 @@ test('never guesses an episode by ordered position after deterministic matches f
   })
   assert.deepEqual(ordinalOnly.evidence?.coordinateMatches, [])
   assert.deepEqual(ordinalOnly.evidence?.absoluteMatches, [])
+
+  const withoutNuvioPolicy = remapEpisode(
+    { season: 1, episode: 2, absoluteEpisode: 10 },
+    [
+      { season: 1, episode: 1, absoluteEpisode: 200 },
+      { season: 1, episode: 2, absoluteEpisode: 10 }
+    ],
+    [
+      { season: 4, episode: 7 },
+      { season: 4, episode: 8 }
+    ]
+  )
+  assert.equal(withoutNuvioPolicy.status, 'unresolved')
+  assert.equal(withoutNuvioPolicy.evidence?.sequenceStrategy, undefined)
 
   const conflictingCoordinateTitle = remapEpisode(
     { season: 1, episode: 10, absoluteEpisode: 10, title: 'Mercy', videoId: 'trakt:2894537' },

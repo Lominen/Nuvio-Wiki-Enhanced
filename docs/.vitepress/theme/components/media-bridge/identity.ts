@@ -102,6 +102,18 @@ function baseAliases(media: MediaRef, context: IdentityContext): IdentityAlias[]
     aliases.push({ namespace, qualifiedNamespace: scopedNamespace, value, key, local })
   }
 
+  const destinationContentId = stremioContentId(media.destinationContentId)
+  if (destinationContentId) {
+    const destinationImdb = imdbId(destinationContentId)
+    const destinationStandard = /^(tmdb|tvdb|trakt|simkl):(\d+)$/i.exec(destinationContentId)
+    if (destinationImdb) add('imdb', destinationImdb)
+    else if (destinationStandard) {
+      add(
+        destinationStandard[1].toLocaleLowerCase('en-US') as 'tmdb' | 'tvdb' | 'trakt' | 'simkl',
+        numericId(destinationStandard[2])
+      )
+    } else add('stremio', destinationContentId)
+  }
   const stremio = stremioContentId(media.ids.stremio)
   add('imdb', imdbId(media.ids.imdb) || imdbId(stremio))
   add('tmdb', numericId(media.ids.tmdb))
@@ -250,6 +262,8 @@ function mergeMedia(target: MediaRef, source: MediaRef): void {
   target.episode ??= source.episode
   target.absoluteEpisode ??= source.absoluteEpisode
   target.videoId ??= source.videoId
+  target.destinationContentId ??= source.destinationContentId
+  target.destinationEpisodeRemapped ||= source.destinationEpisodeRemapped
 }
 
 function withMergedIdentity(original: MediaRef, merged: MediaRef): MediaRef {

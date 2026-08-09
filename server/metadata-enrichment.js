@@ -50,6 +50,60 @@ function normalizeItem(item) {
   };
 }
 
+function metadataIdentityGroups(items) {
+  const pairKeysByAlias = new Map();
+  const groups = new Map();
+
+  for (const item of items) {
+    if (!item.tmdbId || !item.imdbId) continue;
+    const pairKey = `${item.type}:pair:${item.tmdbId}:${item.imdbId}`;
+    for (const alias of item.keys) {
+      const pairKeys = pairKeysByAlias.get(alias) || new Set();
+      pairKeys.add(pairKey);
+      pairKeysByAlias.set(alias, pairKeys);
+    }
+  }
+
+  function groupKey(item) {
+    if (item.tmdbId && item.imdbId) {
+      return `${item.type}:pair:${item.tmdbId}:${item.imdbId}`;
+    }
+    const alias = item.keys[0];
+    const pairKeys = pairKeysByAlias.get(alias);
+    return pairKeys?.size === 1 ? [...pairKeys][0] : `${alias}:only`;
+  }
+
+  for (const item of items) {
+    if (item.keys.length === 0) continue;
+    const key = groupKey(item);
+    const group = groups.get(key) || {
+      items: [],
+      keys: new Set(),
+      tmdbId: null,
+      imdbId: null
+    };
+    group.items.push(item);
+    item.keys.forEach(alias => group.keys.add(alias));
+    group.tmdbId ||= item.tmdbId;
+    group.imdbId ||= item.imdbId;
+    groups.set(key, group);
+  }
+
+  const conflictingKeys = new Set(
+    [...pairKeysByAlias]
+      .filter(([, pairKeys]) => pairKeys.size > 1)
+      .map(([alias]) => alias)
+  );
+  return { groups: [...groups.values()], conflictingKeys };
+}
+
+function cachedValueMatchesGroup(value, group) {
+  const cachedTmdbId = normalizeTmdbId(value?.resolvedTmdbId);
+  const cachedImdbId = normalizeImdbId(value?.resolvedImdbId);
+  return (!group.tmdbId || !cachedTmdbId || group.tmdbId === cachedTmdbId)
+    && (!group.imdbId || !cachedImdbId || group.imdbId === cachedImdbId);
+}
+
 function publicResult(contentId, value, fromCache = false) {
   return {
     content_id: contentId,
@@ -196,13 +250,13 @@ export function createMetadataEnricher({
     const normalizedItems = validateMetadataBatch(items).map(normalizeItem);
     const allKeys = normalizedItems.flatMap(item => item.keys);
     const cachedValues = cache.getMany(allKeys);
-    const taskByKey = new Map();
+    const { groups, conflictingKeys } = metadataIdentityGroups(normalizedItems);
     const tasks = [];
-    const prepared = [];
+    const preparedByItem = new Map();
 
     for (const item of normalizedItems) {
       if (item.keys.length === 0) {
-        prepared.push({ item, value: {
+        preparedByItem.set(item, { item, value: {
           posterUrl: null,
           backgroundUrl: null,
           description: null,
@@ -212,30 +266,38 @@ export function createMetadataEnricher({
           genres: [],
           source: 'missing'
         } });
-        continue;
       }
-
-      const cachedValue = item.keys.map(key => cachedValues.get(key)).find(Boolean);
-      if (cachedValue) {
-        prepared.push({ item, value: cachedValue, fromCache: true });
-        continue;
-      }
-
-      let task = item.keys.map(key => taskByKey.get(key)).find(Boolean);
-      if (!task) {
-        task = { ...item, result: null };
-        tasks.push(task);
-      } else {
-        task.tmdbId ||= item.tmdbId;
-        task.imdbId ||= item.imdbId;
-        task.keys = [...new Set([...task.keys, ...item.keys])];
-      }
-      for (const key of item.keys) taskByKey.set(key, task);
-      prepared.push({ item, task });
     }
 
+    for (const group of groups) {
+      const cachedValue = [...group.keys]
+        .filter(key => !conflictingKeys.has(key))
+        .map(key => cachedValues.get(key))
+        .find(value => value && cachedValueMatchesGroup(value, group));
+      if (cachedValue) {
+        for (const item of group.items) {
+          preparedByItem.set(item, { item, value: cachedValue, fromCache: true });
+        }
+        continue;
+      }
+
+      const representative = group.items.find(item => item.tmdbId && item.imdbId)
+        || group.items[0];
+      const task = {
+        ...representative,
+        tmdbId: group.tmdbId,
+        imdbId: group.imdbId,
+        keys: [...group.keys],
+        result: null
+      };
+      tasks.push(task);
+      for (const item of group.items) {
+        preparedByItem.set(item, { item, task });
+      }
+    }
+
+    const prepared = normalizedItems.map(item => preparedByItem.get(item));
     let nextTask = 0;
-    const cacheWrites = new Map();
 
     async function worker() {
       while (nextTask < tasks.length) {
@@ -297,28 +359,6 @@ export function createMetadataEnricher({
           };
         }
 
-        if (task.result.cacheable) {
-          const value = {
-            posterUrl: task.result.posterUrl,
-            backgroundUrl: task.result.backgroundUrl,
-            description: task.result.description,
-            releaseDate: task.result.releaseDate,
-            imdbRating: task.result.imdbRating,
-            runtimeMs: task.result.runtimeMs,
-            genres: task.result.genres,
-            resolvedTmdbId: task.result.resolvedTmdbId,
-            resolvedImdbId: task.result.resolvedImdbId,
-            source: task.result.source,
-            updatedAt: Date.now()
-          };
-          for (const key of task.keys) cacheWrites.set(key, value);
-          if (task.result.resolvedTmdbId) {
-            cacheWrites.set(`${task.type}:tmdb:${task.result.resolvedTmdbId}`, value);
-          }
-          if (task.result.resolvedImdbId) {
-            cacheWrites.set(`${task.type}:imdb:${task.result.resolvedImdbId}`, value);
-          }
-        }
       }
     }
 
@@ -327,6 +367,43 @@ export function createMetadataEnricher({
       () => worker()
     );
     await Promise.all(workers);
+
+    const cacheCandidates = new Map();
+    for (const task of tasks) {
+      if (!task.result?.cacheable) continue;
+      const value = {
+        posterUrl: task.result.posterUrl,
+        backgroundUrl: task.result.backgroundUrl,
+        description: task.result.description,
+        releaseDate: task.result.releaseDate,
+        imdbRating: task.result.imdbRating,
+        runtimeMs: task.result.runtimeMs,
+        genres: task.result.genres,
+        resolvedTmdbId: task.result.resolvedTmdbId,
+        resolvedImdbId: task.result.resolvedImdbId,
+        source: task.result.source,
+        updatedAt: Date.now()
+      };
+      const resolvedKeys = [
+        task.result.resolvedTmdbId
+          ? `${task.type}:tmdb:${task.result.resolvedTmdbId}`
+          : null,
+        task.result.resolvedImdbId
+          ? `${task.type}:imdb:${task.result.resolvedImdbId}`
+          : null
+      ].filter(key => key && !conflictingKeys.has(key));
+      for (const key of resolvedKeys) {
+        const candidates = cacheCandidates.get(key) || [];
+        candidates.push(value);
+        cacheCandidates.set(key, candidates);
+      }
+    }
+
+    const cacheWrites = new Map(
+      [...cacheCandidates]
+        .filter(([, candidates]) => candidates.length === 1)
+        .map(([key, candidates]) => [key, candidates[0]])
+    );
     cache.setMany(cacheWrites);
 
     const results = prepared.map(entry => {

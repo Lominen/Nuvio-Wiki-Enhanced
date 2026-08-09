@@ -4,6 +4,7 @@ import { createEmptyBundle } from './mediaBridgeCore.ts'
 import {
   enrichMediaBridgeBundle,
   identifyOAuthConnection,
+  invalidateNuvioMetadataCaches,
   inspectDestinationMappings,
   pullMediaBridge,
   pullMediaBridgeForVerification,
@@ -1355,7 +1356,8 @@ test('continues without Kitsu when the Nuvio add-on query is unauthorized and re
         results: body.items.map((item: any) => ({
           content_id: item.content_id,
           imdbId: item._ids.imdb,
-          tmdbId: item._ids.tmdb
+          tmdbId: item._ids.tmdb,
+          genres: ['Animation']
         }))
       })
     }
@@ -1390,6 +1392,112 @@ test('continues without Kitsu when the Nuvio add-on query is unauthorized and re
   assert.ok(logs.some(message => /500 Query Authorization Failed.*continuing without optional Kitsu enrichment/.test(message)))
 })
 
+test('uses Main-profile metadata addons for a Nuvio profile that inherits primary addons', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'inherited-addon-user'
+  connection.profileId = 2
+  connection.profiles = [
+    { profile_index: 1, name: 'Main' },
+    { profile_index: 2, name: 'Kids', uses_primary_addons: true }
+  ]
+  let addonProfileFilter = ''
+
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/api/trakt/enrich-metadata') {
+      return Response.json({
+        results: body.items.map((item: any) => ({
+          content_id: item.content_id,
+          imdbId: item._ids.imdb,
+          genres: ['Animation']
+        }))
+      })
+    }
+    if (url.pathname === '/rest/v1/addons') {
+      addonProfileFilter = url.searchParams.get('profile_id') || ''
+      return Response.json([{
+        url: 'https://inherited-kitsu.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 1
+      }])
+    }
+    if (url.hostname === 'inherited-kitsu.test' && url.pathname === '/manifest.json') {
+      return Response.json({
+        resources: ['catalog', 'meta'],
+        types: ['anime'],
+        idPrefixes: ['kitsu'],
+        catalogs: [{
+          id: 'anime-search',
+          type: 'anime',
+          extra: [{ name: 'search', isRequired: true }]
+        }]
+      })
+    }
+    if (url.hostname === 'inherited-kitsu.test' && url.pathname.startsWith('/catalog/anime/anime-search/search=')) {
+      return Response.json({
+        metas: [{ id: 'kitsu:99', type: 'anime', name: 'Dragon Ball Z', releaseInfo: '1989' }]
+      })
+    }
+    if (url.hostname === 'inherited-kitsu.test' && url.pathname === '/meta/anime/kitsu%3A99.json') {
+      return Response.json({ meta: { id: 'kitsu:99', imdb_id: 'tt0214341', videos: [] } })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const source = createEmptyBundle()
+  source.library.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt0214341' },
+      title: 'Dragon Ball Z',
+      year: 1989
+    },
+    addedAt: Date.UTC(2026, 7, 1),
+    lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
+  })
+
+  const enriched = await enrichMediaBridgeBundle(source, undefined, connection)
+
+  assert.equal(addonProfileFilter, 'eq.1')
+  assert.equal(enriched.library[0].media.ids.external?.kitsu, 99)
+})
+
+test('metadata enrichment fills missing IDs without replacing conflicting source IDs', async t => {
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    if (url.pathname !== '/api/trakt/enrich-metadata') {
+      throw new Error(`Unexpected request: ${url}`)
+    }
+    const body = JSON.parse(String(init?.body || '{}'))
+    return Response.json({
+      results: body.items.map((item: any) => ({
+        content_id: item.content_id,
+        imdbId: 'tt9999999',
+        tmdbId: 999999
+      }))
+    })
+  })
+
+  const source = createEmptyBundle()
+  source.library.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt11126994', tmdb: 94605 },
+      title: 'Arcane',
+      year: 2021
+    },
+    addedAt: Date.UTC(2026, 7, 1),
+    lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
+  })
+
+  const enriched = await enrichMediaBridgeBundle(source)
+
+  assert.equal(enriched.library[0].media.ids.imdb, 'tt11126994')
+  assert.equal(enriched.library[0].media.ids.tmdb, 94605)
+})
+
 test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kitsu identity', async t => {
   const connection = nuvioConnection()
   connection.accountId = 'kitsu-anime-user'
@@ -1409,7 +1517,8 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
         results: body.items.map((item: any) => ({
           content_id: item.content_id,
           imdbId: item._ids.imdb,
-          tmdbId: item._ids.tmdb
+          tmdbId: item._ids.tmdb,
+          genres: ['Animation']
         }))
       })
     }
@@ -1606,6 +1715,363 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
   assert.deepEqual(result.issues, [])
 })
 
+test('prefers a complete IMDb episode catalog over a non-empty incomplete Kitsu catalog', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'complete-imdb-catalog-user'
+  connection.profileId = 31
+  let kitsuMetadataRequests = 0
+  let imdbMetadataRequests = 0
+
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    if (url.pathname === '/rest/v1/addons') {
+      return Response.json([{
+        url: 'https://catalog-completeness.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 31
+      }])
+    }
+    if (url.hostname === 'catalog-completeness.test' && url.pathname === '/manifest.json') {
+      return Response.json({
+        id: 'community.catalog.completeness',
+        resources: ['meta'],
+        types: ['anime', 'series'],
+        idPrefixes: ['kitsu', 'tt']
+      })
+    }
+    if (url.hostname === 'kitsu.io' && url.pathname === '/api/edge/anime/45469/media-relationships') {
+      assert.equal(url.searchParams.get('include'), 'destination')
+      return Response.json({ data: [] })
+    }
+    if (url.hostname === 'api.trakt.tv' && url.pathname === '/shows/154164/seasons') {
+      return Response.json([1, 2].map(season => ({
+        number: season,
+        episodes: Array.from({ length: 9 }, (_, index) => ({
+          number: index + 1,
+          number_abs: ((season - 1) * 9) + index + 1,
+          title: season === 2 && index === 3
+            ? 'Paint the Town Blue'
+            : `Trakt S${season}E${index + 1}`,
+          ids: { trakt: 12_178_800 + ((season - 1) * 9) + index }
+        }))
+      })))
+    }
+    if (url.hostname === 'catalog-completeness.test' && url.pathname.startsWith('/meta/')) {
+      const metadataId = decodeURIComponent(url.pathname.split('/').at(-1)!.replace(/\.json$/, ''))
+      if (metadataId === 'kitsu:45469') {
+        kitsuMetadataRequests++
+        return Response.json({
+          meta: {
+            id: metadataId,
+            videos: Array.from({ length: 9 }, (_, index) => ({
+              id: `${metadataId}:1:${index + 1}`,
+              season: 1,
+              episode: index + 1,
+              title: `Arcane season one episode ${index + 1}`
+            }))
+          }
+        })
+      }
+      if (metadataId === 'tt11126994') {
+        imdbMetadataRequests++
+        return Response.json({
+          meta: {
+            id: metadataId,
+            videos: [1, 2].flatMap(season => Array.from({ length: 9 }, (_, index) => ({
+              id: `${metadataId}:${season}:${index + 1}`,
+              season,
+              episode: index + 1,
+              title: season === 2 && index === 3
+                ? 'Paint the Town Blue'
+                : `IMDb S${season}E${index + 1}`
+            })))
+          }
+        })
+      }
+      return new Response(null, { status: 404 })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const source = createEmptyBundle()
+  source.history.push({
+    media: {
+      kind: 'series',
+      ids: {
+        imdb: 'tt11126994',
+        tmdb: 94605,
+        trakt: 154164,
+        external: { kitsu: 45469 }
+      },
+      title: 'Arcane',
+      year: 2021,
+      season: 2,
+      episode: 4,
+      absoluteEpisode: 13,
+      episodeTitle: 'Paint the Town Blue',
+      videoId: 'trakt:12178812'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+
+  const mappings = await inspectDestinationMappings(
+    connection,
+    source,
+    { history: true, progress: false, library: false },
+    undefined,
+    traktConnection('source')
+  )
+
+  assert.equal(kitsuMetadataRequests, 1)
+  assert.equal(imdbMetadataRequests, 1)
+  assert.equal(mappings.length, 1)
+  assert.equal(mappings[0].mapping.status, 'mapped')
+  assert.equal(mappings[0].mapping.target?.contentId, 'tt11126994')
+  assert.equal(mappings[0].mapping.target?.videoId, 'tt11126994:2:4')
+  assert.deepEqual(
+    mappings[0].mapping.target && [mappings[0].mapping.target.season, mappings[0].mapping.target.episode],
+    [2, 4]
+  )
+})
+
+test('retries a transient Kitsu sequel lookup on the next Nuvio preview', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'retry-kitsu-sequel-user'
+  connection.profileId = 33
+  let relationshipRequests = 0
+
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    if (url.pathname === '/rest/v1/addons') {
+      return Response.json([{
+        url: 'https://retry-kitsu.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 33
+      }])
+    }
+    if (url.hostname === 'retry-kitsu.test' && url.pathname === '/manifest.json') {
+      return Response.json({ resources: ['meta'], types: ['anime'], idPrefixes: ['kitsu'] })
+    }
+    if (url.hostname === 'api.trakt.tv' && url.pathname === '/shows/154164/seasons') {
+      return Response.json([1, 2].map((season, index) => ({
+        number: season,
+        episodes: [{
+          number: 1,
+          number_abs: index + 1,
+          title: index === 0 ? 'Welcome to the Playground' : 'Heavy Is the Crown',
+          ids: { trakt: 12_178_700 + index }
+        }]
+      })))
+    }
+    if (url.hostname === 'kitsu.io' && url.pathname === '/api/edge/anime/45469/media-relationships') {
+      relationshipRequests++
+      if (relationshipRequests === 1) {
+        return Response.json({ errors: [{ title: 'temporarily unavailable' }] }, { status: 503 })
+      }
+      return Response.json({
+        data: [{
+          attributes: { role: 'sequel' },
+          relationships: { destination: { data: { type: 'anime', id: '45515' } } }
+        }]
+      })
+    }
+    if (url.hostname === 'kitsu.io' && url.pathname === '/api/edge/anime/45515/media-relationships') {
+      return Response.json({ data: [] })
+    }
+    if (url.hostname === 'retry-kitsu.test' && url.pathname.startsWith('/meta/')) {
+      const metadataId = decodeURIComponent(url.pathname.split('/').at(-1)!.replace(/\.json$/, ''))
+      if (metadataId === 'kitsu:45469' || metadataId === 'kitsu:45515') {
+        const title = metadataId === 'kitsu:45469'
+          ? 'Welcome to the Playground'
+          : 'Heavy Is the Crown'
+        return Response.json({
+          meta: {
+            id: metadataId,
+            videos: [{ id: `${metadataId}:1:1`, season: 1, episode: 1, title }]
+          }
+        })
+      }
+      return new Response(null, { status: 404 })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const source = createEmptyBundle()
+  source.history.push({
+    media: {
+      kind: 'series',
+      ids: { imdb: 'tt11126994', trakt: 154164, external: { kitsu: 45469 } },
+      title: 'Arcane',
+      year: 2021,
+      season: 2,
+      episode: 1,
+      absoluteEpisode: 2,
+      episodeTitle: 'Heavy Is the Crown',
+      videoId: 'trakt:12178701'
+    },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  const scopes = { history: true, progress: false, library: false }
+  const sourceConnection = traktConnection('source')
+  sourceConnection.accountId = 'retry-kitsu-source'
+
+  const first = await inspectDestinationMappings(
+    connection,
+    source,
+    scopes,
+    undefined,
+    sourceConnection
+  )
+  assert.equal(first[0].mapping.status, 'unresolved')
+
+  invalidateNuvioMetadataCaches(connection)
+  const second = await inspectDestinationMappings(
+    connection,
+    source,
+    scopes,
+    undefined,
+    sourceConnection
+  )
+
+  assert.equal(relationshipRequests, 2)
+  assert.equal(second[0].mapping.status, 'mapped')
+  assert.equal(second[0].mapping.target?.contentId, 'kitsu:45515')
+  assert.equal(second[0].mapping.target?.videoId, 'kitsu:45515:1:1')
+})
+
+test('collapses duplicate history events before expensive Nuvio episode mapping', async t => {
+  const connection = nuvioConnection()
+  connection.accountId = 'duplicate-preflight-user'
+  connection.profileId = 32
+  const logs: string[] = []
+  let metadataRequests = 0
+
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    if (url.pathname === '/rest/v1/addons') {
+      return Response.json([{
+        url: 'https://duplicate-preflight.test/manifest.json',
+        enabled: true,
+        sort_order: 1,
+        profile_id: 32
+      }])
+    }
+    if (url.hostname === 'duplicate-preflight.test' && url.pathname === '/manifest.json') {
+      return Response.json({ resources: ['meta'], types: ['series'], idPrefixes: ['tt'] })
+    }
+    if (url.hostname === 'duplicate-preflight.test' && url.pathname === '/meta/series/tt7654321.json') {
+      metadataRequests++
+      return Response.json({
+        meta: {
+          id: 'tt7654321',
+          videos: [{ id: 'tt7654321:1:1', season: 1, episode: 1, title: 'The Duplicate' }]
+        }
+      })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const source = createEmptyBundle()
+  for (let index = 0; index < 500; index++) {
+    source.history.push({
+      media: {
+        kind: 'series',
+        ids: { imdb: 'tt7654321' },
+        title: 'Duplicate Show',
+        season: 1,
+        episode: 1,
+        episodeTitle: 'The Duplicate'
+      },
+      watchedAt: Date.UTC(2026, 6, 17, 0, 0, index),
+      playCount: 1,
+      eventId: index + 1
+    })
+  }
+
+  const mappings = await inspectDestinationMappings(
+    connection,
+    source,
+    { history: true, progress: false, library: false },
+    message => logs.push(message)
+  )
+
+  assert.equal(mappings.length, 1)
+  assert.equal(mappings[0].mapping.status, 'mapped')
+  assert.equal(metadataRequests, 1)
+  assert.ok(logs.some(message => (
+    message.includes('Checking 1 unique selected records against nuvio metadata')
+    && message.includes('499 duplicate or non-episode records skipped')
+  )))
+})
+
+test('does not delete alternate Nuvio IDs at remapped episode coordinates', async t => {
+  const requestedRpcs: string[] = []
+  let watchedItems: any[] = []
+  let progressEntries: any[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname.startsWith('/rest/v1/rpc/')) {
+      requestedRpcs.push(url.pathname)
+      if (url.pathname === '/rest/v1/rpc/sync_push_watched_items') watchedItems = body.p_items
+      if (url.pathname === '/rest/v1/rpc/sync_push_watch_progress') progressEntries = body.p_entries
+      return Response.json(null)
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const mappedMedia = {
+    kind: 'series' as const,
+    ids: {
+      imdb: 'tt11126994',
+      tmdb: 94605,
+      external: { kitsu: 45469 }
+    },
+    title: 'Arcane',
+    year: 2021,
+    season: 1,
+    episode: 1,
+    absoluteEpisode: 10,
+    episodeTitle: 'Heavy Is the Crown',
+    videoId: 'kitsu:45515:1:1',
+    destinationContentId: 'kitsu:45515',
+    destinationEpisodeRemapped: true
+  }
+  const bundle = createEmptyBundle()
+  bundle.history.push({
+    media: { ...mappedMedia, ids: { ...mappedMedia.ids, external: { ...mappedMedia.ids.external } } },
+    watchedAt: Date.UTC(2026, 6, 17),
+    playCount: 1
+  })
+  bundle.progress.push({
+    media: { ...mappedMedia, ids: { ...mappedMedia.ids, external: { ...mappedMedia.ids.external } } },
+    positionMs: 600_000,
+    durationMs: 2_400_000,
+    updatedAt: Date.UTC(2026, 6, 18)
+  })
+
+  const result = await pushMediaBridge({
+    connection: nuvioConnection(),
+    bundle,
+    scopes: { history: true, progress: true, library: false }
+  })
+
+  assert.equal(requestedRpcs.includes('/rest/v1/rpc/sync_delete_watched_items'), false)
+  assert.equal(requestedRpcs.includes('/rest/v1/rpc/sync_delete_watch_progress'), false)
+  assert.equal(watchedItems[0].content_id, 'kitsu:45515')
+  assert.equal(watchedItems[0].season, 1)
+  assert.equal(watchedItems[0].episode, 1)
+  assert.equal(progressEntries[0].content_id, 'kitsu:45515')
+  assert.equal(progressEntries[0].video_id, 'kitsu:45515:1:1')
+  assert.deepEqual(result.written, { history: 1, progress: 1, library: 0 })
+  assert.deepEqual(result.confirmedScopes, ['history', 'progress'])
+  assert.deepEqual(result.issues, [])
+})
+
 test('maps combined Trakt seasons across related Kitsu installments and writes the owning Kitsu ID', async t => {
   const connection = nuvioConnection()
   connection.accountId = 'split-kitsu-user'
@@ -1632,6 +2098,8 @@ test('maps combined Trakt seasons across related Kitsu installments and writes t
       })
     }
     if (url.hostname === 'kitsu.io' && url.pathname.endsWith('/media-relationships')) {
+      assert.equal(url.searchParams.get('include'), 'destination')
+      assert.equal(url.searchParams.get('page[limit]'), '20')
       const kitsuId = url.pathname.split('/').at(-2)
       return Response.json({
         data: kitsuId === '45469'

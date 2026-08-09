@@ -1,5 +1,6 @@
 import {
   collapseHistoryToWatchedState,
+  canonicalEpisodeKey,
   createEmptyBundle,
   dedupeBundle,
   mediaAliasKeys,
@@ -55,6 +56,8 @@ const TRAKT_MAX_RESUME_PROGRESS = 79
 const TRAKT_PAGE_SIZE = 100
 const TRAKT_READ_CONCURRENCY = 6
 const TRAKT_PAGE_CONCURRENCY = 4
+const PROVIDER_READ_REQUEST_TIMEOUT_MS = 30_000
+const PROVIDER_WRITE_REQUEST_TIMEOUT_MS = 60_000
 const SIMKL_PROGRESS_IMPORT_TIMEOUT_MS = 30_000
 const NUVIO_METADATA_BATCH_SIZE = 400
 const NUVIO_METADATA_BATCH_CONCURRENCY = 4
@@ -62,7 +65,10 @@ const NUVIO_METADATA_REQUEST_TIMEOUT_MS = 120_000
 const NUVIO_ADDON_QUERY_TIMEOUT_MS = 12_000
 const ADDON_RESOURCE_TIMEOUT_MS = 12_000
 const NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS = 45_000
+const NUVIO_KITSU_FALLBACK_TIMEOUT_MS = 15_000
 const NUVIO_KITSU_SEARCH_CONCURRENCY = 6
+const NUVIO_KITSU_CANDIDATE_CONCURRENCY = 4
+const NUVIO_ADDON_MANIFEST_CONCURRENCY = 4
 const NUVIO_KITSU_PROGRESS_INTERVAL = 25
 const LOCAL_SERVER_WRITE_CONCURRENCY = 4
 const NUVIO_WRITE_CONCURRENCY = 3
@@ -622,7 +628,7 @@ async function traktRequest(
   connection: BridgeConnection,
   path: string,
   params: Record<string, any> = {},
-  options: RequestInit = {}
+  options: BridgeRequestInit = {}
 ): Promise<JsonResponse> {
   if (connection.credentials.service !== 'trakt') throw new Error('Expected Trakt credentials.')
   const token = await ensureTraktToken(connection)
@@ -630,8 +636,13 @@ async function traktRequest(
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
   }
-  const requestOptions = {
+  const isWrite = String(options.method || 'GET').toUpperCase() !== 'GET'
+  const requestOptions: BridgeRequestInit = {
     ...options,
+    timeoutMs: options.timeoutMs || (
+      isWrite ? PROVIDER_WRITE_REQUEST_TIMEOUT_MS : PROVIDER_READ_REQUEST_TIMEOUT_MS
+    ),
+    timeoutMessage: options.timeoutMessage || `Trakt ${isWrite ? 'write' : 'read'} did not respond before the deadline.`,
     headers: {
       'Content-Type': 'application/json',
       'trakt-api-key': connection.credentials.clientId,
@@ -640,11 +651,12 @@ async function traktRequest(
       ...(options.headers || {})
     }
   }
-  const isWrite = String(options.method || 'GET').toUpperCase() !== 'GET'
   if (isWrite) await waitForWriteSlot(connection.credentials, 1_050)
   try {
     const request = () => requestBridgeJson(url.toString(), requestOptions)
-    return await (isWrite ? request() : traktReadLimiter(connection.credentials)(request))
+    return await (isWrite
+      ? request()
+      : traktReadLimiter(connection.credentials)(() => retryBridgeOperation(request, { retries: 1 })))
   } catch (error: any) {
     if (!isWrite || error?.status !== 429) throw error
     const retrySeconds = Math.max(1, Number(error.headers?.get?.('retry-after') || 1))
@@ -767,6 +779,8 @@ export async function nuvioRpc(
     const token = await ensureNuvioToken(connection)
     const { data } = await requestBridgeJson(`${NUVIO_API}/rest/v1/rpc/${name}`, {
       method: 'POST',
+      timeoutMs: PROVIDER_WRITE_REQUEST_TIMEOUT_MS,
+      timeoutMessage: `Nuvio ${name} did not respond before the deadline.`,
       headers: {
         apikey: connection.credentials.publicKey,
         Authorization: `Bearer ${token}`,
@@ -2931,15 +2945,32 @@ interface BridgeMetadataResult {
   retryable?: boolean
 }
 
+function isLikelyAnimeMedia(
+  media: MediaRef,
+  metadata?: BridgeMetadataResult
+): boolean {
+  if (kitsuContentId(media)) return true
+  const externalNamespaces = Object.keys(media.ids.external || {})
+  if (externalNamespaces.some(namespace => (
+    ['kitsu', 'mal', 'anilist', 'anidb'].includes(namespace.toLowerCase())
+  ))) return true
+  return (metadata?.genres || []).some(genre => {
+    const normalized = normalizeTitle(genre)
+    return normalized === 'animation' || normalized === 'anime'
+  })
+}
+
 function withResolvedExternalIds(
   media: MediaRef,
   metadata?: BridgeMetadataResult
 ): MediaRef {
   const ids = { ...media.ids }
   const imdbId = String(metadata?.imdbId || '').trim().toLowerCase()
-  if (/^tt\d+$/.test(imdbId)) ids.imdb = imdbId
+  const existingImdbId = String(ids.imdb || '').trim().toLowerCase()
+  if (!/^tt\d+$/.test(existingImdbId) && /^tt\d+$/.test(imdbId)) ids.imdb = imdbId
   const tmdbId = String(metadata?.tmdbId || '').trim()
-  if (/^[1-9]\d*$/.test(tmdbId)) {
+  const existingTmdbId = String(ids.tmdb || '').trim()
+  if (!/^[1-9]\d*$/.test(existingTmdbId) && /^[1-9]\d*$/.test(tmdbId)) {
     const numeric = Number(tmdbId)
     ids.tmdb = Number.isSafeInteger(numeric) ? numeric : tmdbId
   }
@@ -3112,17 +3143,33 @@ export async function enrichMediaBridgeBundle(
   }
   const records = [...bundle.history, ...bundle.progress, ...bundle.library]
   const metadata = await loadBridgeMetadata(records.map(record => record.media), log)
+  const metadataByResolvedMedia = new Map<MediaRef, BridgeMetadataResult | undefined>()
   for (const record of records) {
-    record.media = withResolvedExternalIds(record.media, metadata.get(record.media))
+    const resolvedMetadata = metadata.get(record.media)
+    record.media = withResolvedExternalIds(record.media, resolvedMetadata)
+    metadataByResolvedMedia.set(record.media, resolvedMetadata)
   }
   if (nuvioConnection?.service === 'nuvio') {
     // Keep one add-on snapshot for planning, but start every preview/run with a
     // fresh attempt so a previous authorization or network failure cannot
     // poison later syncs until the page is reloaded.
     invalidateNuvioMetadataCaches(nuvioConnection)
+    const likelyAnime = [
+      ...bundle.progress,
+      ...bundle.history,
+      ...bundle.library
+    ].map(record => record.media).filter(media => (
+      isLikelyAnimeMedia(media, metadataByResolvedMedia.get(media))
+    ))
+    if (likelyAnime.length) {
+      logTo(
+        log,
+        `Prioritizing ${likelyAnime.length} animation/anime records for native Nuvio identity lookup.`
+      )
+    }
     await enrichNuvioKitsuAliases(
       nuvioConnection,
-      records.map(record => record.media),
+      likelyAnime,
       log
     )
   }
@@ -3213,14 +3260,20 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         ...(record.media.kind === 'series' ? { season: record.media.season, episode: record.media.episode } : {}),
         watched_at: record.watchedAt
       })
-      for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
-        const key = {
-          content_id: legacyId,
-          ...(record.media.kind === 'series'
-            ? { season: record.media.season, episode: record.media.episode }
-            : {})
+      // A remap can move Trakt S2E1 to another owner's (or numbering scheme's)
+      // S1E1. Deleting every source alias at the *target* coordinates could
+      // erase a legitimate destination episode. Without the original source
+      // coordinates in the write record, retaining aliases is lossless.
+      if (record.media.kind !== 'series' || !record.media.destinationEpisodeRemapped) {
+        for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
+          const key = {
+            content_id: legacyId,
+            ...(record.media.kind === 'series'
+              ? { season: record.media.season, episode: record.media.episode }
+              : {})
+          }
+          legacyKeys.set(JSON.stringify(key), key)
         }
-        legacyKeys.set(JSON.stringify(key), key)
       }
     }
     if (legacyKeys.size) {
@@ -3267,10 +3320,12 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         duration: Math.round(absolute.durationMs),
         last_watched: record.updatedAt
       })
-      for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
-        legacyKeys.add(record.media.kind === 'series'
-          ? `${legacyId}_s${record.media.season}e${record.media.episode}`
-          : legacyId)
+      if (record.media.kind !== 'series' || !record.media.destinationEpisodeRemapped) {
+        for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
+          legacyKeys.add(record.media.kind === 'series'
+            ? `${legacyId}_s${record.media.season}e${record.media.episode}`
+            : legacyId)
+        }
       }
     }
     if (legacyKeys.size) {
@@ -3344,7 +3399,16 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
 
   await Promise.all([historyWrite, progressWrite, libraryWrite])
 
-  return { written, skipped, issues }
+  return {
+    written,
+    skipped,
+    issues,
+    // Each Nuvio sync RPC completes the submitted transaction before its 2xx
+    // response. Treat that response as authoritative; immediately re-reading
+    // the full profile is both expensive and vulnerable to stale replicas.
+    confirmedScopes: (['history', 'progress', 'library'] as const)
+      .filter(scope => scopes[scope])
+  }
 }
 
 function simklRows(data: any, bucket: 'movies' | 'shows' | 'anime'): any[] {
@@ -4463,9 +4527,15 @@ const traktTargetEpisodeCache = new Map<string, Promise<EpisodeRef[]>>()
 const nuvioKitsuSearchCache = new Map<string, Promise<string | null>>()
 const kitsuSequelCache = new Map<string, Promise<string | null>>()
 
+function nuvioAddonProfileId(connection: BridgeConnection): number {
+  const selected = Number(connection.profileId)
+  const profile = connection.profiles?.find(item => Number(item.profile_index) === selected)
+  return profile?.uses_primary_addons === true ? 1 : selected
+}
+
 export function invalidateNuvioMetadataCaches(connection: BridgeConnection): void {
   const profileKey = `${connection.accountId}:${connection.profileId}`
-  nuvioAddonCache.delete(profileKey)
+  nuvioAddonCache.delete(`${connection.accountId}:${nuvioAddonProfileId(connection)}`)
   for (const key of nuvioEpisodeCache.keys()) {
     if (key.startsWith(`${profileKey}:`)) nuvioEpisodeCache.delete(key)
   }
@@ -4541,14 +4611,15 @@ async function nuvioMetadataAddons(
   log?: BridgeLog,
   signal?: AbortSignal
 ): Promise<NuvioMetaAddon[]> {
-  const cacheKey = `${connection.accountId}:${connection.profileId}`
+  const addonProfileId = nuvioAddonProfileId(connection)
+  const cacheKey = `${connection.accountId}:${addonProfileId}`
   if (!nuvioAddonCache.has(cacheKey)) {
     const request = (async () => {
       let rows: any
       try {
         rows = await nuvioRest(connection, 'addons', {
           select: 'url,name,sort_order,profile_id,enabled',
-          profile_id: `eq.${Number(connection.profileId)}`,
+          profile_id: `eq.${addonProfileId}`,
           order: 'sort_order.asc'
         }, {
           signal,
@@ -4562,34 +4633,39 @@ async function nuvioMetadataAddons(
         )
         return []
       }
-      const addons: NuvioMetaAddon[] = []
-      for (const row of Array.isArray(rows) ? rows : []) {
-        if (signal?.aborted) throw signal.reason
-        if (!row?.url || row.enabled === false) continue
-        const baseUrl = addonBaseUrl(row.url)
-        if (!baseUrl) continue
-        try {
-          const manifest = (await requestBridgeJson(
-            addonResourceUrl(baseUrl, 'manifest.json'),
-            {
-              signal,
-              timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
-              timeoutMessage: 'A Nuvio add-on manifest did not respond before the deadline.'
+      const baseUrls = (Array.isArray(rows) ? rows : [])
+        .filter(row => row?.url && row.enabled !== false)
+        .map(row => addonBaseUrl(row.url))
+        .filter(Boolean)
+      const resolved = await mapLimit(
+        baseUrls,
+        NUVIO_ADDON_MANIFEST_CONCURRENCY,
+        async (baseUrl): Promise<NuvioMetaAddon | null> => {
+          if (signal?.aborted) throw signal.reason
+          try {
+            const manifest = (await requestBridgeJson(
+              addonResourceUrl(baseUrl, 'manifest.json'),
+              {
+                signal,
+                timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
+                timeoutMessage: 'A Nuvio add-on manifest did not respond before the deadline.'
+              }
+            )).data
+            const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
+            if (resources.some((resource: any) => manifestResourceName(resource) === 'meta')) {
+              return {
+                baseUrl,
+                kitsuSearchCatalogs: kitsuSearchCatalogs(manifest)
+              }
             }
-          )).data
-          const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
-          if (resources.some((resource: any) => manifestResourceName(resource) === 'meta')) {
-            addons.push({
-              baseUrl,
-              kitsuSearchCatalogs: kitsuSearchCatalogs(manifest)
-            })
+          } catch (error) {
+            if (signal?.aborted) throw signal.reason || error
+            // Try the next enabled addon.
           }
-        } catch (error) {
-          if (signal?.aborted) throw signal.reason || error
-          // Try the next enabled addon.
+          return null
         }
-      }
-      return addons
+      )
+      return resolved.filter((addon): addon is NuvioMetaAddon => Boolean(addon))
     })()
     nuvioAddonCache.set(cacheKey, request)
   }
@@ -4740,17 +4816,25 @@ async function resolveNuvioKitsuContentId(
                 timeoutMessage: 'A Kitsu catalog search did not respond before the deadline.'
               }
             )
-            for (const candidate of kitsuSearchCandidates(
+            const candidates = kitsuSearchCandidates(
               Array.isArray(data?.metas) ? data.metas : [],
               media
-            )) {
-              const imdbMatch = await verifyKitsuCandidateImdb(
-                addon,
-                catalog,
+            )
+            const verifiedCandidates = await mapLimit(
+              candidates,
+              NUVIO_KITSU_CANDIDATE_CONCURRENCY,
+              async candidate => ({
                 candidate,
-                media,
-                signal
-              )
+                imdbMatch: await verifyKitsuCandidateImdb(
+                  addon,
+                  catalog,
+                  candidate,
+                  media,
+                  signal
+                )
+              })
+            )
+            for (const { candidate, imdbMatch } of verifiedCandidates) {
               if (imdbMatch === true) {
                 verified.add(candidate.contentId)
                 continue
@@ -4917,20 +5001,30 @@ async function kitsuSequelContentId(contentId: string): Promise<string | null> {
     kitsuSequelCache.set(normalized, (async () => {
       try {
         const kitsuId = normalized.slice('kitsu:'.length)
-        const { data } = await requestBridgeJson(
-          `${KITSU_API}/anime/${encodeURIComponent(kitsuId)}/media-relationships`,
-          {
+        let nextUrl: string | null = `${KITSU_API}/anime/${encodeURIComponent(kitsuId)}`
+          + '/media-relationships?include=destination&page%5Blimit%5D=20'
+        const sequels = new Set<string>()
+        for (let page = 0; nextUrl && page < 5; page++) {
+          const { data } = await requestBridgeJson(nextUrl, {
             timeoutMs: ADDON_RESOURCE_TIMEOUT_MS,
             timeoutMessage: 'Kitsu relationship metadata did not respond before the deadline.'
+          })
+          for (const relationship of Array.isArray(data?.data) ? data.data : []) {
+            if (String(relationship?.attributes?.role || '').toLowerCase() !== 'sequel') continue
+            const destination = relationship?.relationships?.destination?.data
+            if (String(destination?.type || '').toLowerCase() !== 'anime') continue
+            const sequel = normalizedKitsuContentId(`kitsu:${destination?.id ?? ''}`)
+            if (sequel && sequel !== normalized) sequels.add(sequel)
           }
-        )
-        const sequels = new Set<string>()
-        for (const relationship of Array.isArray(data?.data) ? data.data : []) {
-          if (String(relationship?.attributes?.role || '').toLowerCase() !== 'sequel') continue
-          const destination = relationship?.relationships?.destination?.data
-          if (String(destination?.type || '').toLowerCase() !== 'anime') continue
-          const sequel = normalizedKitsuContentId(`kitsu:${destination?.id ?? ''}`)
-          if (sequel && sequel !== normalized) sequels.add(sequel)
+          const rawNext = String(data?.links?.next || '').trim()
+          if (!rawNext) {
+            nextUrl = null
+            continue
+          }
+          const parsedNext = new URL(rawNext, KITSU_API)
+          nextUrl = parsedNext.origin === new URL(KITSU_API).origin
+            ? parsedNext.toString()
+            : null
         }
         return sequels.size === 1 ? [...sequels][0] : null
       } catch {
@@ -4938,7 +5032,15 @@ async function kitsuSequelContentId(contentId: string): Promise<string | null> {
       }
     })())
   }
-  return kitsuSequelCache.get(normalized)!
+  const pending = kitsuSequelCache.get(normalized)!
+  const sequel = await pending
+  // A missing linkage is not authoritative: Kitsu omits relationship data
+  // without `include=destination`, and transient API failures are common.
+  // Cache only a positive edge so the next preview can recover by retrying.
+  if (!sequel && kitsuSequelCache.get(normalized) === pending) {
+    kitsuSequelCache.delete(normalized)
+  }
+  return sequel
 }
 
 async function kitsuInstallmentContentIds(contentId: string): Promise<string[]> {
@@ -4953,6 +5055,16 @@ async function kitsuInstallmentContentIds(contentId: string): Promise<string[]> 
     output.push(next)
   }
   return output
+}
+
+function regularEpisodeCount(episodes: readonly EpisodeRef[]): number {
+  const identities = new Set<string>()
+  for (const episode of episodes) {
+    if (episode.season <= 0 || episode.episode <= 0) continue
+    const owner = String(episode.contentId || '')
+    identities.add(`${owner}:${episode.season}:${episode.episode}`)
+  }
+  return identities.size
 }
 
 async function nuvioEpisodeRefsForCandidate(
@@ -4976,7 +5088,12 @@ async function nuvioEpisodeRefsForCandidate(
           }
         )
         const videos = orderedStremioVideos(data?.meta)
-        if (videos.length) return episodeRefs(videos)
+        if (!videos.length) continue
+        const episodes = episodeRefs(videos).map(episode => ({
+          ...episode,
+          contentId: candidate
+        }))
+        return episodes
       } catch {
         // Try the next ID/type/addon combination.
       }
@@ -4991,9 +5108,6 @@ async function nuvioKitsuInstallmentEpisodes(
   firstEpisodes: readonly EpisodeRef[],
   sourceEpisodes: readonly EpisodeRef[]
 ): Promise<EpisodeRef[]> {
-  const regularEpisodeCount = (episodes: readonly EpisodeRef[]) => episodes.filter(episode => (
-    episode.season > 0 && episode.episode > 0
-  )).length
   const sourceCount = regularEpisodeCount(sourceEpisodes)
   const firstCount = regularEpisodeCount(firstEpisodes)
   if (!sourceCount || sourceCount <= firstCount) return [...firstEpisodes]
@@ -5058,14 +5172,28 @@ async function nuvioTargetEpisodes(
       // Try the preferred ID across every addon before falling back to the next
       // namespace. This keeps the selected native catalog identity stable even
       // when an earlier addon can answer only for a lower-priority alias.
+      let best: EpisodeRef[] = []
       for (const candidate of candidates) {
         const episodes = await nuvioEpisodeRefsForCandidate(addons, candidate)
         if (!episodes.length) continue
-        return normalizedKitsuContentId(candidate)
-          ? nuvioKitsuInstallmentEpisodes(addons, candidate, episodes, sourceEpisodes)
+        const catalog = normalizedKitsuContentId(candidate)
+          ? await nuvioKitsuInstallmentEpisodes(addons, candidate, episodes, sourceEpisodes)
           : episodes
+        if (!sourceEpisodeCount) return catalog
+        const count = regularEpisodeCount(catalog)
+        const bestCount = regularEpisodeCount(best)
+        if (
+          !best.length
+          || Math.abs(sourceEpisodeCount - count) < Math.abs(sourceEpisodeCount - bestCount)
+        ) {
+          best = catalog
+        }
+        // Preserve provider/add-on priority for an exact complete catalog.
+        // Otherwise compare every alias and retain the closest structure;
+        // merely being larger can indicate duplicated or unrelated videos.
+        if (count === sourceEpisodeCount) return catalog
       }
-      return []
+      return best
     })())
   }
   return nuvioEpisodeCache.get(key)!
@@ -5079,7 +5207,7 @@ async function traktTargetEpisodes(
   if (!showId) return []
   const key = `${connection.accountId}:${showId}`
   if (!traktTargetEpisodeCache.has(key)) {
-    traktTargetEpisodeCache.set(key, traktRequest(
+    const request = traktRequest(
       connection,
       `/shows/${encodeURIComponent(String(showId))}/seasons`,
       { extended: 'episodes,full' }
@@ -5100,9 +5228,18 @@ async function traktTargetEpisodes(
         }
       }
       return episodes
-    }).catch(() => []))
+    })
+    traktTargetEpisodeCache.set(key, request)
   }
-  return traktTargetEpisodeCache.get(key)!
+  const pending = traktTargetEpisodeCache.get(key)!
+  try {
+    return await pending
+  } catch {
+    // Network/authorization failures are not authoritative empty catalogs.
+    // Let a later preview retry after the connection recovers.
+    if (traktTargetEpisodeCache.get(key) === pending) traktTargetEpisodeCache.delete(key)
+    return []
+  }
 }
 
 async function targetEpisodesFor(
@@ -5120,6 +5257,45 @@ async function targetEpisodesFor(
   return []
 }
 
+async function tryNuvioKitsuFallback(
+  connection: BridgeConnection,
+  bundle: CanonicalBundle,
+  media: MediaRef,
+  sourceEpisodes: readonly EpisodeRef[]
+): Promise<EpisodeRef[]> {
+  if (connection.service !== 'nuvio' || kitsuContentId(media)) return []
+  const controller = new AbortController()
+  const timeout = setTimeout(() => {
+    const error = new Error('On-demand Kitsu mapping reached its deadline.')
+    error.name = 'TimeoutError'
+    controller.abort(error)
+  }, NUVIO_KITSU_FALLBACK_TIMEOUT_MS)
+  try {
+    const addons = (await nuvioMetadataAddons(connection, undefined, controller.signal))
+      .filter(addon => addon.kitsuSearchCatalogs.length)
+    if (!addons.length) return []
+    const contentId = await resolveNuvioKitsuContentId(
+      connection,
+      media,
+      addons,
+      controller.signal
+    )
+    if (!contentId) return []
+
+    const sharedAliases = new Set(mediaAliasKeys(media))
+    for (const record of [...bundle.history, ...bundle.progress, ...bundle.library]) {
+      if (mediaAliasKeys(record.media).some(alias => sharedAliases.has(alias))) {
+        applyKitsuContentId(record.media, contentId)
+      }
+    }
+    return nuvioTargetEpisodes(connection, media, sourceEpisodes)
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 /**
  * Preflights episode numbering against the destination's actual catalog. A
  * direct coordinate/title/absolute match is returned to the pure planner;
@@ -5133,7 +5309,7 @@ export async function inspectDestinationMappings(
   sourceConnection?: BridgeConnection
 ): Promise<DestinationMappingIssue[]> {
   if (!['stremio', 'nuvio', 'trakt', 'plex', 'jellyfin'].includes(connection.service)) return []
-  const records: Array<{
+  const selectedRecords: Array<{
     scope: 'history' | 'progress'
     media: MediaRef
     progress?: ProgressRecord
@@ -5141,33 +5317,73 @@ export async function inspectDestinationMappings(
     ...(scopes.history ? bundle.history.map(record => ({ scope: 'history' as const, media: record.media })) : []),
     ...(scopes.progress ? bundle.progress.map(record => ({ scope: 'progress' as const, media: record.media, progress: record })) : [])
   ]
+  const recordsByKey = new Map<string, typeof selectedRecords[number]>()
+  for (const record of selectedRecords) {
+    if (record.media.kind !== 'series') continue
+    const identity = canonicalEpisodeKey(record.media)
+      || mediaAliasKeys(record.media)[0]
+      || [
+        record.media.kind,
+        normalizeTitle(record.media.title),
+        Number(record.media.year) || '',
+        Number(record.media.season),
+        Number(record.media.episode),
+        Number(record.media.absoluteEpisode) || '',
+        String(record.media.videoId || '')
+      ].join(':')
+    const key = `${record.scope}:${identity}`
+    if (!recordsByKey.has(key)) recordsByKey.set(key, record)
+  }
+  const records = [...recordsByKey.values()]
   if (!records.length) return []
 
-  logTo(log, `Checking ${records.length} selected records against ${connection.service} metadata...`)
+  const collapsed = selectedRecords.length - records.length
+  logTo(
+    log,
+    `Checking ${records.length} unique selected records against ${connection.service} metadata`
+    + `${collapsed ? ` (${collapsed} duplicate or non-episode records skipped)` : ''}...`
+  )
   const issues = await mapLimit(records, 6, async record => {
-    if (
-      record.scope === 'progress'
-      && record.progress
-      && (connection.service === 'nuvio' || connection.service === 'stremio')
-      && !absoluteProgress(record.progress)
-    ) {
-      return {
-        scope: record.scope,
-        sourceMedia: record.media,
-        mapping: {
-          status: 'unresolved',
-          confidence: 'none',
-          target: null,
-          candidates: [],
-          reason: `${connection.service === 'nuvio' ? 'Nuvio' : 'Stremio'} needs an absolute position and duration; percentage-only progress cannot be stored safely.`
-        } as MappingOutcome
-      }
-    }
     if (record.media.kind !== 'series') return null
     const sourceEpisodes = sourceConnection
       ? await targetEpisodesFor(sourceConnection, record.media)
       : []
-    const targets = await targetEpisodesFor(connection, record.media, sourceEpisodes)
+    const requested: EpisodeRef = {
+      season: Number(record.media.season),
+      episode: Number(record.media.episode),
+      absoluteEpisode: record.media.absoluteEpisode,
+      title: record.media.episodeTitle,
+      videoId: record.media.videoId
+    }
+    let targets = await targetEpisodesFor(connection, record.media, sourceEpisodes)
+    const mappingOptions = connection.service === 'nuvio'
+      ? { allowUnanchoredSameIndex: true }
+      : undefined
+    let mapping = targets.length
+      ? remapEpisode(
+          requested,
+          sourceEpisodes.length ? sourceEpisodes : [requested],
+          targets,
+          mappingOptions
+        )
+      : null
+    if (connection.service === 'nuvio' && mapping?.status !== 'mapped') {
+      const fallbackTargets = await tryNuvioKitsuFallback(
+        connection,
+        bundle,
+        record.media,
+        sourceEpisodes
+      )
+      if (fallbackTargets.length) {
+        targets = fallbackTargets
+        mapping = remapEpisode(
+          requested,
+          sourceEpisodes.length ? sourceEpisodes : [requested],
+          fallbackTargets,
+          mappingOptions
+        )
+      }
+    }
     if (!targets.length) {
       const reason = connection.service === 'stremio'
         ? 'Stremio has no episode metadata for this series; its watched bitfield cannot be encoded safely.'
@@ -5190,21 +5406,10 @@ export async function inspectDestinationMappings(
         } as MappingOutcome
       }
     }
-    const requested: EpisodeRef = {
-      season: Number(record.media.season),
-      episode: Number(record.media.episode),
-      absoluteEpisode: record.media.absoluteEpisode,
-      title: record.media.episodeTitle,
-      videoId: record.media.videoId
-    }
     return {
       scope: record.scope,
       sourceMedia: record.media,
-      mapping: remapEpisode(
-        requested,
-        sourceEpisodes.length ? sourceEpisodes : [requested],
-        targets
-      )
+      mapping: mapping!
     }
   })
   return issues.filter((issue): issue is DestinationMappingIssue => Boolean(issue))
