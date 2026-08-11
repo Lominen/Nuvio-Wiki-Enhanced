@@ -265,7 +265,8 @@ test('preserves history events while deduping state records deterministically', 
     {
       media: sharedMovie,
       addedAt: 500,
-      lists: [{ service: 'trakt', kind: 'watchlist', accountId: 'alice' }]
+      lists: [{ service: 'trakt', kind: 'watchlist', accountId: 'alice' }],
+      posterUrl: 'https://cdn.example/shared.webp'
     },
     {
       media: sharedMovie,
@@ -289,6 +290,7 @@ test('preserves history events while deduping state records deterministically', 
   assert.equal(deduped.progress[0].positionMs, 80)
   assert.equal(deduped.library.length, 1)
   assert.equal(deduped.library[0].addedAt, 600)
+  assert.equal(deduped.library[0].posterUrl, 'https://cdn.example/shared.webp')
   assert.deepEqual(deduped.library[0].lists.map(list => `${list.service}:${list.kind}`), [
     'nuvio:library',
     'trakt:watchlist'

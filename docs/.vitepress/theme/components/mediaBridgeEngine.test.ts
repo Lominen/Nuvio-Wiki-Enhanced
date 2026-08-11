@@ -126,7 +126,7 @@ test('previews all 36 directional routes through the provider registry', async (
   }
   const engine = createMediaBridgeEngine({
     adapters: adapters(state),
-    enrichBundle: async bundle => bundle
+    resolveNuvioBundle: async bundle => bundle
   })
   for (const source of SERVICE_IDS) {
     for (const destination of SERVICE_IDS) {
@@ -157,7 +157,7 @@ test('is additive and leaves destination-only records out of the transfer', asyn
   assert.ok(prepared.plan.rows.every(row => row.media.ids.imdb !== 'tt999'))
 })
 
-test('enriches a TMDB-only source to IMDb before planning a Nuvio write', async () => {
+test('keeps a TMDB-only source identity while resolving a Nuvio-bound bundle', async () => {
   const source = createEmptyBundle()
   source.library.push({
     media: { kind: 'movie', ids: { tmdb: 118340 }, title: 'Guardians', year: 2014 },
@@ -169,22 +169,20 @@ test('enriches a TMDB-only source to IMDb before planning a Nuvio write', async 
     destination: createEmptyBundle(),
     verifyScopes: []
   }
-  let enrichmentCalls = 0
-  let enrichmentProfile: string | number | null | undefined
+  let resolutionCalls = 0
+  let resolutionProfile: string | number | null | undefined
   const engine = createMediaBridgeEngine({
     adapters: adapters(state),
-    async enrichBundle(bundle, _log, endpoint) {
-      enrichmentCalls++
-      enrichmentProfile = endpoint?.profileId
-      const enriched = structuredClone(bundle)
-      enriched.library[0].media.ids.imdb = 'tt2015381'
-      return enriched
+    async resolveNuvioBundle(bundle, _log, endpoint) {
+      resolutionCalls++
+      resolutionProfile = endpoint?.profileId
+      return structuredClone(bundle)
     }
   })
   const prepared = await engine.preview(engineInput('trakt', 'nuvio'))
-  assert.equal(enrichmentCalls, 1)
-  assert.equal(enrichmentProfile, 2)
-  assert.equal(prepared.plan.transfer.library[0].media.ids.imdb, 'tt2015381')
+  assert.equal(resolutionCalls, 1)
+  assert.equal(resolutionProfile, 2)
+  assert.equal(prepared.plan.transfer.library[0].media.ids.imdb, undefined)
   assert.equal(prepared.plan.transfer.library[0].media.ids.tmdb, 118340)
 })
 
@@ -215,7 +213,7 @@ test('retains Nuvio duplicate-alias evidence long enough to plan cleanup', async
   }
   const engine = createMediaBridgeEngine({
     adapters: adapters(state),
-    enrichBundle: async bundle => bundle
+    resolveNuvioBundle: async bundle => bundle
   })
   const prepared = await engine.preview(engineInput('trakt', 'nuvio'))
   assert.equal(prepared.plan.stats.update, 1)
@@ -322,7 +320,7 @@ test('reports identity conflicts as non-skipping warnings with both records as e
   }
   const engine = createMediaBridgeEngine({
     adapters: adapters(state),
-    enrichBundle: async bundle => bundle
+    resolveNuvioBundle: async bundle => bundle
   })
 
   const prepared = await engine.preview(engineInput('trakt', 'simkl'))

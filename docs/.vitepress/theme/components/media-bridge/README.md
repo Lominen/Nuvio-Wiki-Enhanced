@@ -1,9 +1,9 @@
 # Media bridge internals
 
 The sync bridge stays browser-local. `engine.ts` owns the complete lifecycle:
-endpoint validation, concurrent snapshots, Nuvio alias enrichment, identity
-coalescing, deterministic destination resolution, planning, writing, selective
-verification, and result aggregation.
+endpoint validation, concurrent snapshots, Nuvio Kitsu identity resolution,
+identity coalescing, deterministic destination resolution, planning, writing,
+selective verification, and result aggregation.
 
 - `identity.ts` builds namespace-safe identity components and endpoint-scopes
   Plex/Jellyfin local IDs.

@@ -212,7 +212,8 @@ function cloneMedia(media: MediaRef): MediaRef {
   if (media.ids.external) ids.external = { ...media.ids.external }
   return {
     ...media,
-    ids
+    ids,
+    ...(media.genres ? { genres: [...media.genres] } : {})
   }
 }
 
@@ -257,6 +258,11 @@ function mergeMedia(target: MediaRef, source: MediaRef): void {
   mergeIds(target.ids, source.ids)
   target.title = richerText(target.title, source.title)
   target.episodeTitle = richerText(target.episodeTitle, source.episodeTitle)
+  if (source.genres?.length) {
+    const genres = new Map((target.genres || []).map(genre => [genre.toLowerCase(), genre]))
+    source.genres.forEach(genre => genres.set(genre.toLowerCase(), genre))
+    target.genres = [...genres.values()]
+  }
   target.year ??= source.year
   target.season ??= source.season
   target.episode ??= source.episode
@@ -272,6 +278,7 @@ function withMergedIdentity(original: MediaRef, merged: MediaRef): MediaRef {
   if (merged.ids.external) result.ids.external = { ...merged.ids.external }
   if (!result.title && merged.title) result.title = merged.title
   if (!result.episodeTitle && merged.episodeTitle) result.episodeTitle = merged.episodeTitle
+  if (merged.genres?.length) result.genres = [...merged.genres]
   if (result.year === undefined && merged.year !== undefined) result.year = merged.year
   if (result.season === undefined && merged.season !== undefined) result.season = merged.season
   if (result.episode === undefined && merged.episode !== undefined) result.episode = merged.episode

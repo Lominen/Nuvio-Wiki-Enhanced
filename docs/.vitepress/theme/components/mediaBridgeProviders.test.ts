@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createEmptyBundle } from './mediaBridgeCore.ts'
 import {
-  enrichMediaBridgeBundle,
   identifyOAuthConnection,
   invalidateNuvioMetadataCaches,
   inspectDestinationMappings,
@@ -10,6 +9,7 @@ import {
   pullMediaBridgeForVerification,
   pushMediaBridge,
   requestBridgeJson,
+  resolveNuvioMediaBridgeBundle,
   signInJellyfin,
   type BridgeConnection
 } from './mediaBridgeProviders.ts'
@@ -541,6 +541,62 @@ test('preserves Trakt replay history events and their IDs', async t => {
   assert.deepEqual(destination.issues, [])
 })
 
+test('pulls a Trakt poster URL and passes it through to Nuvio', async t => {
+  const posterUrl = 'https://walter-r2.trakt.tv/images/movies/000/012/601/posters/thumb/e0d9dd35c5.jpg.webp'
+  let metadataRequests = 0
+  let libraryItems: any[] = []
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(String(input), 'https://nuvio.wiki')
+    if (url.hostname === 'api.trakt.tv') {
+      assert.equal(url.searchParams.get('extended'), 'full,images')
+      if (url.pathname === '/sync/watchlist/movies' && url.searchParams.get('page') === '1') {
+        return Response.json([{
+          listed_at: '2026-07-17T12:00:00Z',
+          movie: {
+            title: 'TRON: Legacy',
+            year: 2010,
+            ids: { trakt: 12601, imdb: 'tt1104001', tmdb: 20526 },
+            images: {
+              poster: [posterUrl.replace(/^https:\/\//, '')]
+            }
+          }
+        }])
+      }
+      return Response.json([])
+    }
+    const body = JSON.parse(String(init?.body || '{}'))
+    if (url.pathname === '/api/trakt/enrich-metadata') {
+      metadataRequests++
+      return Response.json({ results: [] })
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_push_library_items') {
+      libraryItems = body.p_items
+      return Response.json(null)
+    }
+    if (url.pathname === '/rest/v1/rpc/sync_delete_library_items') return Response.json(null)
+    throw new Error(`Unexpected request: ${url}`)
+  })
+
+  const pulled = await pullMediaBridge({
+    connection: traktConnection('source'),
+    scopes: { history: false, progress: false, library: true }
+  })
+  assert.equal(pulled.bundle.library.length, 1)
+  assert.equal(pulled.bundle.library[0].posterUrl, posterUrl)
+
+  const result = await pushMediaBridge({
+    connection: nuvioConnection(),
+    bundle: pulled.bundle,
+    scopes: { history: false, progress: false, library: true }
+  })
+
+  assert.equal(metadataRequests, 0)
+  assert.equal(libraryItems.length, 1)
+  assert.equal(libraryItems[0].poster, posterUrl)
+  assert.equal(libraryItems[0].poster_shape, 'POSTER')
+  assert.equal(result.written.library, 1)
+})
+
 test('reads every Trakt history page and maps episodes through their parent show', async t => {
   const requestedPages: string[] = []
   t.mock.method(globalThis, 'fetch', async input => {
@@ -840,10 +896,10 @@ test('refreshes an expired Trakt token once for concurrent reads', async t => {
   assert.equal(apiRequests, 6)
 })
 
-test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment', async t => {
+test('writes IMDb-first Nuvio IDs with source posters and omits unsupported metadata', async t => {
   let watchedItems: any[] = []
   let deletedWatchedKeys: any[] = []
-  let metadataItems: any[] = []
+  let metadataRequests = 0
   let libraryItems: any[] = []
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input), 'https://nuvio.wiki')
@@ -857,21 +913,8 @@ test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment',
       return Response.json(null)
     }
     if (url.pathname === '/api/trakt/enrich-metadata') {
-      metadataItems = body.items
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          tmdbId: item._ids.tmdb,
-          imdbId: item._ids.imdb,
-          posterUrl: 'https://image.tmdb.org/t/p/w500/poster.jpg',
-          backgroundUrl: 'https://image.tmdb.org/t/p/original/background.jpg',
-          description: 'A space adventure.',
-          releaseDate: '2014-08-01',
-          imdbRating: 8.1,
-          genres: ['Action', 'Science Fiction'],
-          source: 'tmdb'
-        }))
-      })
+      metadataRequests++
+      return Response.json({ results: [] })
     }
     if (url.pathname === '/rest/v1/rpc/sync_push_library_items') {
       libraryItems = body.p_items
@@ -903,7 +946,18 @@ test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment',
   bundle.library.push({
     media,
     addedAt: Date.UTC(2026, 6, 16),
-    lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
+    lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }],
+    posterUrl: 'https://walter-r2.trakt.tv/images/movies/000/012/601/posters/thumb/e0d9dd35c5.jpg.webp'
+  })
+  bundle.library.push({
+    media: {
+      kind: 'movie',
+      ids: { imdb: 'tt7654321', jellyfin: 'movie-101' },
+      title: 'Jellyfin title without artwork',
+      year: 2024
+    },
+    addedAt: Date.UTC(2026, 6, 15),
+    lists: [{ service: 'jellyfin', accountId: 'jellyfin-user', kind: 'library' }]
   })
 
   const result = await pushMediaBridge({
@@ -913,7 +967,7 @@ test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment',
   })
 
   assert.equal(result.written.history, 2)
-  assert.equal(result.written.library, 1)
+  assert.equal(result.written.library, 2)
   const watchedMovie = watchedItems.find(item => item.content_type === 'movie')
   assert.equal(watchedMovie.content_id, 'tt2015381')
   assert.deepEqual(
@@ -928,35 +982,34 @@ test('writes IMDb-first Nuvio IDs while retaining TMDB for metadata enrichment',
   assert.equal(watchedEpisode.title, 'Game of Thrones')
   assert.equal(watchedEpisode.season, 0)
   assert.equal(watchedEpisode.episode, 44)
-  assert.match(metadataItems[0].content_id, /^bridge:\d+$/)
-  assert.deepEqual(metadataItems[0]._ids, { tmdb: 118340, imdb: 'tt2015381' })
-  assert.equal(libraryItems.length, 1)
+  assert.equal(metadataRequests, 0)
+  assert.equal(libraryItems.length, 2)
   assert.equal(libraryItems.some(item => item.content_id === 'tmdb:118340'), false)
-  assert.equal(libraryItems[0].content_id, 'tt2015381')
-  assert.equal(libraryItems[0].poster, 'https://image.tmdb.org/t/p/w500/poster.jpg')
-  assert.equal(libraryItems[0].poster_shape, 'POSTER')
-  assert.equal(libraryItems[0].background, 'https://image.tmdb.org/t/p/original/background.jpg')
-  assert.equal(libraryItems[0].description, 'A space adventure.')
-  assert.equal(libraryItems[0].release_info, '2014-08-01')
-  assert.equal(libraryItems[0].imdb_rating, 8.1)
-  assert.deepEqual(libraryItems[0].genres, ['Action', 'Science Fiction'])
+  const traktItem = libraryItems.find(item => item.content_id === 'tt2015381')
+  assert.equal(
+    traktItem.poster,
+    'https://walter-r2.trakt.tv/images/movies/000/012/601/posters/thumb/e0d9dd35c5.jpg.webp'
+  )
+  assert.equal(traktItem.poster_shape, 'POSTER')
+  assert.equal(traktItem.release_info, '2014')
+  for (const field of ['background', 'description', 'imdb_rating', 'genres', 'addon_base_url']) {
+    assert.equal(Object.hasOwn(traktItem, field), false)
+  }
+  const jellyfinItem = libraryItems.find(item => item.content_id === 'tt7654321')
+  assert.equal(Object.hasOwn(jellyfinItem, 'poster'), false)
+  assert.equal(Object.hasOwn(jellyfinItem, 'poster_shape'), false)
   assert.deepEqual(result.issues, [])
 })
 
-test('converts percentage-only progress to Nuvio elapsed time using metadata runtime', async t => {
+test('skips percentage-only Nuvio progress without a source duration', async t => {
   let progressEntries: any[] = []
+  let metadataRequests = 0
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input), 'https://nuvio.wiki')
     const body = JSON.parse(String(init?.body || '{}'))
     if (url.pathname === '/api/trakt/enrich-metadata') {
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          imdbId: item._ids.imdb,
-          runtimeMs: 7_200_000,
-          source: 'cinemeta'
-        }))
-      })
+      metadataRequests++
+      return Response.json({ results: [] })
     }
     if (url.pathname === '/rest/v1/rpc/sync_push_watch_progress') {
       progressEntries = body.p_entries
@@ -973,12 +1026,12 @@ test('converts percentage-only progress to Nuvio elapsed time using metadata run
     scopes: { history: false, progress: true, library: false }
   })
 
-  assert.equal(progressEntries.length, 1)
-  assert.equal(progressEntries[0].position, 3_600_000)
-  assert.equal(progressEntries[0].duration, 7_200_000)
-  assert.equal(progressEntries[0].progress_key, 'tt2015381')
-  assert.equal(result.written.progress, 1)
-  assert.deepEqual(result.issues, [])
+  assert.equal(metadataRequests, 0)
+  assert.equal(progressEntries.length, 0)
+  assert.equal(result.written.progress, 0)
+  assert.equal(result.skipped?.progress, 1)
+  assert.equal(result.issues.length, 1)
+  assert.match(result.issues[0].reason, /reliable runtime/)
 })
 
 test('writes Nuvio series-level watched state and stable episode progress keys', async t => {
@@ -1038,22 +1091,15 @@ test('writes Nuvio series-level watched state and stable episode progress keys',
   assert.deepEqual(result.issues, [])
 })
 
-test('resolves a TMDB-only source to the corresponding IMDb ID before writing Nuvio', async t => {
-  let metadataItems: any[] = []
+test('keeps a TMDB-only source ID when writing Nuvio', async t => {
+  let metadataRequests = 0
   let watchedItems: any[] = []
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input), 'https://nuvio.wiki')
     const body = JSON.parse(String(init?.body || '{}'))
     if (url.pathname === '/api/trakt/enrich-metadata') {
-      metadataItems = body.items
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          tmdbId: '118340',
-          imdbId: 'tt2015381',
-          source: 'tmdb'
-        }))
-      })
+      metadataRequests++
+      return Response.json({ results: [] })
     }
     if (url.pathname === '/rest/v1/rpc/sync_push_watched_items') {
       watchedItems = body.p_items
@@ -1083,15 +1129,14 @@ test('resolves a TMDB-only source to the corresponding IMDb ID before writing Nu
     scopes: { history: true, progress: false, library: false }
   })
 
-  assert.equal(metadataItems.length, 1)
-  assert.equal(metadataItems[0]._ids.tmdb, 118340)
-  assert.equal(watchedItems[0].content_id, 'tt2015381')
+  assert.equal(metadataRequests, 0)
+  assert.equal(watchedItems[0].content_id, 'tmdb:118340')
 })
 
-test('folds mixed Nuvio IMDb and TMDB library rows through resolved aliases', async t => {
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+test('preserves mixed Nuvio IMDb and TMDB library rows without metadata lookup', async t => {
+  let metadataRequests = 0
+  t.mock.method(globalThis, 'fetch', async input => {
     const url = new URL(String(input), 'https://nuvio.wiki')
-    const body = JSON.parse(String(init?.body || '{}'))
     if (url.pathname === '/rest/v1/rpc/sync_pull_library') {
       return Response.json([
         {
@@ -1111,14 +1156,8 @@ test('folds mixed Nuvio IMDb and TMDB library rows through resolved aliases', as
       ])
     }
     if (url.pathname === '/api/trakt/enrich-metadata') {
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          tmdbId: '118340',
-          imdbId: 'tt2015381',
-          source: 'tmdb'
-        }))
-      })
+      metadataRequests++
+      return Response.json({ results: [] })
     }
     throw new Error(`Unexpected request: ${url.pathname}`)
   })
@@ -1128,9 +1167,12 @@ test('folds mixed Nuvio IMDb and TMDB library rows through resolved aliases', as
     scopes: { history: false, progress: false, library: true }
   })
 
-  assert.equal(result.bundle.library.length, 1)
-  assert.equal(result.bundle.library[0].media.ids.imdb, 'tt2015381')
-  assert.equal(result.bundle.library[0].media.ids.tmdb, 118340)
+  assert.equal(metadataRequests, 0)
+  assert.equal(result.bundle.library.length, 2)
+  const imdbRecord = result.bundle.library.find(record => record.media.ids.imdb === 'tt2015381')
+  const tmdbRecord = result.bundle.library.find(record => record.media.ids.tmdb === 118340)
+  assert.equal(imdbRecord?.media.ids.tmdb, undefined)
+  assert.equal(tmdbRecord?.media.ids.imdb, undefined)
 })
 
 test('uses the IMDb show ID when preflighting Trakt episodes against Nuvio metadata', async t => {
@@ -1391,19 +1433,8 @@ test('continues without Kitsu when the Nuvio add-on query is unauthorized and re
   const logs: string[] = []
   let addonRequests = 0
 
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  t.mock.method(globalThis, 'fetch', async input => {
     const url = new URL(String(input), 'https://nuvio.wiki')
-    const body = JSON.parse(String(init?.body || '{}'))
-    if (url.pathname === '/api/trakt/enrich-metadata') {
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          imdbId: item._ids.imdb,
-          tmdbId: item._ids.tmdb,
-          genres: ['Animation']
-        }))
-      })
-    }
     if (url.pathname === '/rest/v1/addons') {
       addonRequests++
       return Response.json({ message: 'Query Authorization Failed' }, { status: 500 })
@@ -1417,22 +1448,23 @@ test('continues without Kitsu when the Nuvio add-on query is unauthorized and re
       kind: 'series',
       ids: { imdb: 'tt0944947', tmdb: 1399 },
       title: 'Game of Thrones',
-      year: 2011
+      year: 2011,
+      genres: ['Animation']
     },
     addedAt: Date.UTC(2026, 7, 1),
     lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
   })
 
-  const first = await enrichMediaBridgeBundle(source, message => logs.push(message), connection)
-  const second = await enrichMediaBridgeBundle(source, message => logs.push(message), connection)
+  const first = await resolveNuvioMediaBridgeBundle(source, message => logs.push(message), connection)
+  const second = await resolveNuvioMediaBridgeBundle(source, message => logs.push(message), connection)
 
   assert.equal(first.library.length, 1)
   assert.equal(second.library.length, 1)
   assert.equal(first.library[0].media.ids.imdb, 'tt0944947')
   assert.equal(first.library[0].media.ids.external?.kitsu, undefined)
   assert.equal(addonRequests, 2)
-  assert.ok(logs.some(message => /TMDB metadata batches complete: 1\/1; checking add-on identities next/.test(message)))
-  assert.ok(logs.some(message => /500 Query Authorization Failed.*continuing without optional Kitsu enrichment/.test(message)))
+  assert.ok(logs.every(message => !/TMDB metadata/.test(message)))
+  assert.ok(logs.some(message => /500 Query Authorization Failed.*continuing without optional Kitsu identity resolution/.test(message)))
 })
 
 test('uses Main-profile metadata addons for a Nuvio profile that inherits primary addons', async t => {
@@ -1445,18 +1477,8 @@ test('uses Main-profile metadata addons for a Nuvio profile that inherits primar
   ]
   let addonProfileFilter = ''
 
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  t.mock.method(globalThis, 'fetch', async input => {
     const url = new URL(String(input), 'https://nuvio.wiki')
-    const body = JSON.parse(String(init?.body || '{}'))
-    if (url.pathname === '/api/trakt/enrich-metadata') {
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          imdbId: item._ids.imdb,
-          genres: ['Animation']
-        }))
-      })
-    }
     if (url.pathname === '/rest/v1/addons') {
       addonProfileFilter = url.searchParams.get('profile_id') || ''
       return Response.json([{
@@ -1495,24 +1517,27 @@ test('uses Main-profile metadata addons for a Nuvio profile that inherits primar
       kind: 'series',
       ids: { imdb: 'tt0214341' },
       title: 'Dragon Ball Z',
-      year: 1989
+      year: 1989,
+      genres: ['Animation']
     },
     addedAt: Date.UTC(2026, 7, 1),
     lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
   })
 
-  const enriched = await enrichMediaBridgeBundle(source, undefined, connection)
+  const enriched = await resolveNuvioMediaBridgeBundle(source, undefined, connection)
 
   assert.equal(addonProfileFilter, 'eq.1')
   assert.equal(enriched.library[0].media.ids.external?.kitsu, 99)
 })
 
-test('metadata enrichment fills missing IDs without replacing conflicting source IDs', async t => {
+test('Nuvio resolution keeps source IDs without server metadata lookup', async t => {
+  let metadataRequests = 0
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input), 'https://nuvio.wiki')
     if (url.pathname !== '/api/trakt/enrich-metadata') {
       throw new Error(`Unexpected request: ${url}`)
     }
+    metadataRequests++
     const body = JSON.parse(String(init?.body || '{}'))
     return Response.json({
       results: body.items.map((item: any) => ({
@@ -1535,8 +1560,9 @@ test('metadata enrichment fills missing IDs without replacing conflicting source
     lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
   })
 
-  const enriched = await enrichMediaBridgeBundle(source)
+  const enriched = await resolveNuvioMediaBridgeBundle(source)
 
+  assert.equal(metadataRequests, 0)
   assert.equal(enriched.library[0].media.ids.imdb, 'tt11126994')
   assert.equal(enriched.library[0].media.ids.tmdb, 94605)
 })
@@ -1555,16 +1581,6 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(String(input), 'https://nuvio.wiki')
     const body = JSON.parse(String(init?.body || '{}'))
-    if (url.pathname === '/api/trakt/enrich-metadata') {
-      return Response.json({
-        results: body.items.map((item: any) => ({
-          content_id: item.content_id,
-          imdbId: item._ids.imdb,
-          tmdbId: item._ids.tmdb,
-          genres: ['Animation']
-        }))
-      })
-    }
     if (url.pathname === '/rest/v1/addons') {
       return Response.json([{
         url: 'https://anime-kitsu.test/manifest.json',
@@ -1667,7 +1683,8 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
       trakt: 5630
     },
     title: 'Dragon Ball Z',
-    year: 1989
+    year: 1989,
+    genres: ['Animation']
   }
   const source = createEmptyBundle()
   source.history.push({
@@ -1703,7 +1720,7 @@ test('resolves Trakt anime through an enabled Kitsu catalog and persists the Kit
     lists: [{ service: 'trakt', accountId: 'test-account', kind: 'watchlist' }]
   })
 
-  const enriched = await enrichMediaBridgeBundle(source, message => logs.push(message), connection)
+  const enriched = await resolveNuvioMediaBridgeBundle(source, message => logs.push(message), connection)
   assert.equal(source.history[0].media.ids.external, undefined)
   for (const record of [...enriched.history, ...enriched.progress, ...enriched.library]) {
     assert.equal(record.media.ids.external?.kitsu, 99)
@@ -3531,6 +3548,7 @@ test('serializes Simkl reads and imports the full TVDB episode projection', asyn
         show: {
           title: 'Mapped Show',
           year: 2024,
+          poster: '36/36842f1bceb6b39',
           ids: { imdb: 'tt7654321', tvdb: 12345 }
         },
         status: 'watching',
@@ -3575,6 +3593,10 @@ test('serializes Simkl reads and imports the full TVDB episode projection', asyn
   assert.equal(result.bundle.history[0].media.episode, 3)
   assert.equal(result.bundle.history[0].media.absoluteEpisode, 26)
   assert.equal(result.bundle.library.length, 1)
+  assert.equal(
+    result.bundle.library[0].posterUrl,
+    'https://wsrv.nl/?url=https://simkl.in/posters/36/36842f1bceb6b39_m.webp&q=90'
+  )
 })
 
 test('maps Nuvio TVDB coordinates through the cached Simkl native anime catalog', async t => {

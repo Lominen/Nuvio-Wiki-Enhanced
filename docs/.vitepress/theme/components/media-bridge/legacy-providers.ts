@@ -61,12 +61,12 @@ const PROVIDER_WRITE_REQUEST_TIMEOUT_MS = 60_000
 const NUVIO_WATCHED_PAGE_SIZE = 900
 const NUVIO_LIBRARY_PAGE_SIZE = 500
 const NUVIO_LIBRARY_MUTATION_BATCH_SIZE = 500
-const NUVIO_METADATA_BATCH_SIZE = 400
-const NUVIO_METADATA_BATCH_CONCURRENCY = 4
-const NUVIO_METADATA_REQUEST_TIMEOUT_MS = 120_000
+const BRIDGE_METADATA_BATCH_SIZE = 400
+const BRIDGE_METADATA_BATCH_CONCURRENCY = 4
+const BRIDGE_METADATA_REQUEST_TIMEOUT_MS = 120_000
 const NUVIO_ADDON_QUERY_TIMEOUT_MS = 12_000
 const ADDON_RESOURCE_TIMEOUT_MS = 12_000
-const NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS = 45_000
+const NUVIO_KITSU_RESOLUTION_TIMEOUT_MS = 45_000
 const NUVIO_KITSU_FALLBACK_TIMEOUT_MS = 15_000
 const NUVIO_KITSU_SEARCH_CONCURRENCY = 6
 const NUVIO_KITSU_CANDIDATE_CONCURRENCY = 4
@@ -2649,12 +2649,59 @@ async function pushJellyfin(options: PushOptions): Promise<PushResult> {
   return { written, skipped, issues, confirmedScopes }
 }
 
+function sourceGenres(value: any, extras: readonly string[] = []): string[] | undefined {
+  const genres = [
+    ...(Array.isArray(value?.genres) ? value.genres : []),
+    ...extras
+  ].filter((value): value is string => typeof value === 'string')
+    .map(value => value.trim())
+    .filter(Boolean)
+  if (!genres.length) return undefined
+  return [...new Map(genres.map(genre => [genre.toLowerCase(), genre])).values()]
+}
+
+function publicPosterUrl(value: unknown): string | undefined {
+  const raw = String(value || '').trim()
+  if (!raw) return undefined
+  const normalized = raw.startsWith('//') ? `https:${raw}` : raw
+  if (!/^https:\/\//i.test(normalized)) return undefined
+  try {
+    const url = new URL(normalized)
+    return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password
+      ? url.toString()
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function traktPosterUrl(value: any): string | undefined {
+  const posters = Array.isArray(value?.images?.poster)
+    ? value.images.poster
+    : [value?.images?.poster]
+  for (const poster of posters) {
+    const raw = String(poster || '').trim()
+    if (!raw || (raw.startsWith('/') && !raw.startsWith('//')) || raw.includes('\\')) continue
+    const normalized = /^https:\/\//i.test(raw)
+      ? raw
+      : raw.startsWith('//')
+        ? `https:${raw}`
+        : /^[a-z][a-z0-9+.-]*:/i.test(raw)
+          ? ''
+          : `https://${raw}`
+    const posterUrl = publicPosterUrl(normalized)
+    if (posterUrl) return posterUrl
+  }
+  return undefined
+}
+
 function mediaFromTrakt(value: any, kind: 'movie' | 'series'): MediaRef {
   return {
     kind,
     ids: normalizeIds(value?.ids, 'trakt'),
     title: value?.title,
-    year: Number(value?.year) || undefined
+    year: Number(value?.year) || undefined,
+    genres: sourceGenres(value)
   }
 }
 
@@ -2704,10 +2751,10 @@ async function pullTrakt(options: PullOptions): Promise<PullResult> {
   const libraryRequest = scopes.library
     ? (logTo(log, 'Reading Trakt watchlist and collection...'),
       Promise.all([
-        traktGetAll(connection, '/sync/watchlist/movies', { extended: 'full' }),
-        traktGetAll(connection, '/sync/watchlist/shows', { extended: 'full' }),
-        traktGetAll(connection, '/sync/collection/movies', { extended: 'full' }),
-        traktGetAll(connection, '/sync/collection/shows', { extended: 'full' })
+        traktGetAll(connection, '/sync/watchlist/movies', { extended: 'full,images' }),
+        traktGetAll(connection, '/sync/watchlist/shows', { extended: 'full,images' }),
+        traktGetAll(connection, '/sync/collection/movies', { extended: 'full,images' }),
+        traktGetAll(connection, '/sync/collection/shows', { extended: 'full,images' })
       ]))
     : Promise.resolve<null>(null)
 
@@ -2807,12 +2854,15 @@ async function pullTrakt(options: PullOptions): Promise<PullResult> {
     const [watchlistMovies, watchlistShows, collectionMovies, collectionShows] = libraryRows
     const addRows = (rows: any[], kind: 'movie' | 'series', listKind: 'watchlist' | 'collection') => {
       for (const item of rows) {
-        const media = mediaFromTrakt(kind === 'movie' ? item.movie : item.show, kind)
+        const subject = kind === 'movie' ? item.movie : item.show
+        const media = mediaFromTrakt(subject, kind)
+        const posterUrl = traktPosterUrl(subject)
         bundle.library.push({
           media,
           addedAt: asEpochMs(item.listed_at || item.collected_at || item.updated_at),
           lists: [{ ...provenance, kind: listKind }],
-          source: provenance
+          source: provenance,
+          ...(posterUrl ? { posterUrl } : {})
         })
       }
     }
@@ -3204,11 +3254,13 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
           title: item.name,
           year: Number(String(item.release_info || '').slice(0, 4)) || undefined
         }
+        const posterUrl = publicPosterUrl(item.poster)
         bundle.library.push({
           media,
           addedAt: asEpochMs(item.added_at),
           lists: [{ ...provenance, kind: 'library' }],
-          source: provenance
+          source: provenance,
+          ...(posterUrl ? { posterUrl } : {})
         })
       }
       if (batch.length < NUVIO_LIBRARY_PAGE_SIZE) break
@@ -3216,19 +3268,6 @@ async function pullNuvio(options: PullOptions): Promise<PullResult> {
   })() : Promise.resolve()
 
   await Promise.all([historyRequest, progressRequest, libraryRequest])
-
-  const pulledRecords = [
-    ...bundle.history,
-    ...bundle.progress,
-    ...bundle.library
-  ]
-  const metadataByMedia = await loadBridgeMetadata(
-    pulledRecords.map(record => record.media),
-    log
-  )
-  for (const record of pulledRecords) {
-    record.media = withResolvedExternalIds(record.media, metadataByMedia.get(record.media))
-  }
 
   const duplicateAliases = new Set<string>()
   const aliasCounts = new Map<string, number>()
@@ -3262,26 +3301,17 @@ interface BridgeMetadataResult {
   content_id: string | number
   tmdbId?: string | number | null
   imdbId?: string | null
-  posterUrl?: string | null
-  backgroundUrl?: string | null
-  description?: string | null
-  releaseDate?: string | null
-  imdbRating?: number | null
   runtimeMs?: number | null
-  genres?: string[]
   retryable?: boolean
 }
 
-function isLikelyAnimeMedia(
-  media: MediaRef,
-  metadata?: BridgeMetadataResult
-): boolean {
+function isLikelyAnimeMedia(media: MediaRef): boolean {
   if (kitsuContentId(media)) return true
   const externalNamespaces = Object.keys(media.ids.external || {})
   if (externalNamespaces.some(namespace => (
     ['kitsu', 'mal', 'anilist', 'anidb'].includes(namespace.toLowerCase())
   ))) return true
-  return (metadata?.genres || []).some(genre => {
+  return (media.genres || []).some(genre => {
     const normalized = normalizeTitle(genre)
     return normalized === 'animation' || normalized === 'anime'
   })
@@ -3304,23 +3334,15 @@ function withResolvedExternalIds(
   return { ...media, ids }
 }
 
-function resolvedNuvioContentId(
-  media: MediaRef,
-  metadata?: BridgeMetadataResult
-): string | null {
-  return nuvioContentId(withResolvedExternalIds(media, metadata))
-}
-
 function alternateNuvioContentIds(
   media: MediaRef,
-  preferredId: string,
-  metadata?: BridgeMetadataResult
+  preferredId: string
 ): string[] {
-  return nuvioContentIds(withResolvedExternalIds(media, metadata))
+  return nuvioContentIds(media)
     .filter(contentId => contentId !== preferredId)
 }
 
-async function enrichNuvioMetadataChunk(
+async function fetchBridgeMetadataChunk(
   items: readonly Record<string, any>[],
   attempt = 0
 ): Promise<BridgeMetadataResult[]> {
@@ -3331,21 +3353,21 @@ async function enrichNuvioMetadataChunk(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
-        timeoutMs: NUVIO_METADATA_REQUEST_TIMEOUT_MS,
-        timeoutMessage: 'Nuvio TMDB metadata enrichment did not finish before its deadline.'
+        timeoutMs: BRIDGE_METADATA_REQUEST_TIMEOUT_MS,
+        timeoutMessage: 'Bridge TMDB metadata lookup did not finish before its deadline.'
       }
     )
     const results = Array.isArray(data?.results) ? data.results : []
     const retryItems = items.filter((_, index) => results[index]?.retryable)
     if (retryItems.length && attempt < 1) {
       await sleep(500)
-      return [...results, ...await enrichNuvioMetadataChunk(retryItems, attempt + 1)]
+      return [...results, ...await fetchBridgeMetadataChunk(retryItems, attempt + 1)]
     }
     return results
   } catch (error: any) {
     if (attempt < 1 && (error?.status === 429 || error?.status >= 500)) {
       await sleep(1_000)
-      return enrichNuvioMetadataChunk(items, attempt + 1)
+      return fetchBridgeMetadataChunk(items, attempt + 1)
     }
     throw error
   }
@@ -3382,12 +3404,12 @@ async function loadBridgeMetadata(
     name: String(media.title || 'Untitled').slice(0, 256),
     _ids: { tmdb: media.ids.tmdb, imdb: media.ids.imdb }
   }))
-  const metadataChunks = chunk(metadataItems, NUVIO_METADATA_BATCH_SIZE)
+  const metadataChunks = chunk(metadataItems, BRIDGE_METADATA_BATCH_SIZE)
   const results: BridgeMetadataResult[] = []
 
-  for (let offset = 0; offset < metadataChunks.length; offset += NUVIO_METADATA_BATCH_CONCURRENCY) {
-    const wave = metadataChunks.slice(offset, offset + NUVIO_METADATA_BATCH_CONCURRENCY)
-    const settled = await Promise.allSettled(wave.map(items => enrichNuvioMetadataChunk(items)))
+  for (let offset = 0; offset < metadataChunks.length; offset += BRIDGE_METADATA_BATCH_CONCURRENCY) {
+    const wave = metadataChunks.slice(offset, offset + BRIDGE_METADATA_BATCH_CONCURRENCY)
+    const settled = await Promise.allSettled(wave.map(items => fetchBridgeMetadataChunk(items)))
     for (const result of settled) {
       if (result.status === 'fulfilled') {
         results.push(...result.value)
@@ -3395,12 +3417,12 @@ async function loadBridgeMetadata(
         const reason = result.reason instanceof Error
           ? result.reason.message
           : errorDetail(result.reason, 'metadata request failed')
-        logTo(log, `Warning: A Nuvio metadata batch failed (${reason}).`)
+        logTo(log, `Warning: A bridge metadata batch failed (${reason}).`)
       }
     }
     logTo(
       log,
-      `Nuvio TMDB metadata batches complete: ${Math.min(offset + wave.length, metadataChunks.length)}/${metadataChunks.length}; checking add-on identities next.`
+      `Bridge TMDB metadata batches complete: ${Math.min(offset + wave.length, metadataChunks.length)}/${metadataChunks.length}.`
     )
   }
 
@@ -3415,13 +3437,10 @@ async function loadBridgeMetadata(
 }
 
 /**
- * Enriches a canonical bundle through the existing Nuvio metadata endpoint
- * and the selected profile's enabled Kitsu catalog. The engine invokes this
- * before planning so TMDB-only records gain an IMDb alias and matching anime
- * gain their native Kitsu identity without moving credentials out of the
- * browser.
+ * Resolves likely anime against the selected profile's enabled Kitsu catalog
+ * before planning. Source IDs and metadata otherwise pass through unchanged.
  */
-export async function enrichMediaBridgeBundle(
+export async function resolveNuvioMediaBridgeBundle(
   input: CanonicalBundle,
   log?: BridgeLog,
   nuvioConnection?: BridgeConnection
@@ -3468,14 +3487,6 @@ export async function enrichMediaBridgeBundle(
       lists: record.lists.map(list => ({ ...list }))
     }))
   }
-  const records = [...bundle.history, ...bundle.progress, ...bundle.library]
-  const metadata = await loadBridgeMetadata(records.map(record => record.media), log)
-  const metadataByResolvedMedia = new Map<MediaRef, BridgeMetadataResult | undefined>()
-  for (const record of records) {
-    const resolvedMetadata = metadata.get(record.media)
-    record.media = withResolvedExternalIds(record.media, resolvedMetadata)
-    metadataByResolvedMedia.set(record.media, resolvedMetadata)
-  }
   if (nuvioConnection?.service === 'nuvio') {
     // Keep one add-on snapshot for planning, but start every preview/run with a
     // fresh attempt so a previous authorization or network failure cannot
@@ -3486,7 +3497,7 @@ export async function enrichMediaBridgeBundle(
       ...bundle.history,
       ...bundle.library
     ].map(record => record.media).filter(media => (
-      isLikelyAnimeMedia(media, metadataByResolvedMedia.get(media))
+      isLikelyAnimeMedia(media)
     ))
     if (likelyAnime.length) {
       logTo(
@@ -3494,31 +3505,13 @@ export async function enrichMediaBridgeBundle(
         `Prioritizing ${likelyAnime.length} animation/anime records for native Nuvio identity lookup.`
       )
     }
-    await enrichNuvioKitsuAliases(
+    await resolveNuvioKitsuAliases(
       nuvioConnection,
       likelyAnime,
       log
     )
   }
   return dedupeBundle(bundle)
-}
-
-function enrichNuvioLibraryImports(
-  imports: NuvioLibraryImport[],
-  metadataByMedia: ReadonlyMap<MediaRef, BridgeMetadataResult>
-) {
-  for (const entry of imports) {
-    const metadata = metadataByMedia.get(entry.media)
-    if (metadata?.posterUrl) {
-      entry.item.poster = metadata.posterUrl
-      entry.item.poster_shape = 'POSTER'
-    }
-    if (metadata?.backgroundUrl) entry.item.background = metadata.backgroundUrl
-    if (metadata?.description) entry.item.description = metadata.description
-    if (metadata?.releaseDate) entry.item.release_info = metadata.releaseDate
-    if (Number.isFinite(metadata?.imdbRating)) entry.item.imdb_rating = metadata.imdbRating
-    if (Array.isArray(metadata?.genres) && metadata.genres.length) entry.item.genres = metadata.genres
-  }
 }
 
 async function pushNuvio(options: PushOptions): Promise<PushResult> {
@@ -3535,28 +3528,12 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
   const watchedRecords = scopes.history
     ? collapseHistoryToWatchedState(bundle.history)
     : []
-  const metadataMedia = [
-    ...watchedRecords
-      .filter(record => !/^tt\d+$/i.test(String(record.media.ids.imdb || '')))
-      .map(record => record.media),
-    ...(scopes.progress
-      ? bundle.progress
-        .filter(record => (
-          !/^tt\d+$/i.test(String(record.media.ids.imdb || ''))
-          || !absoluteProgress(record)
-        ))
-        .map(record => record.media)
-      : []),
-    ...(scopes.library ? bundle.library.map(record => record.media) : [])
-  ]
-  const metadataByMedia = await loadBridgeMetadata(metadataMedia, log)
 
   const historyWrite = scopes.history && watchedRecords.length ? (async () => {
     const rows: any[] = []
     const legacyKeys = new Map<string, Record<string, any>>()
     for (const record of watchedRecords) {
-      const metadata = metadataByMedia.get(record.media)
-      const contentId = resolvedNuvioContentId(record.media, metadata)
+      const contentId = nuvioContentId(record.media)
       if (!contentId) {
         skip({ scope: 'history', status: 'unresolved', media: record.media, reason: 'Nuvio needs a supported content ID.' })
         continue
@@ -3576,7 +3553,7 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
       // erase a legitimate destination episode. Without the original source
       // coordinates in the write record, retaining aliases is lossless.
       if (record.media.kind !== 'series' || !record.media.destinationEpisodeRemapped) {
-        for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
+        for (const legacyId of alternateNuvioContentIds(record.media, contentId)) {
           const key = {
             content_id: legacyId,
             ...(record.media.kind === 'series' && season !== undefined ? { season } : {}),
@@ -3606,9 +3583,8 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
     const rows: any[] = []
     const legacyKeys = new Set<string>()
     for (const record of bundle.progress) {
-      const metadata = metadataByMedia.get(record.media)
-      const contentId = resolvedNuvioContentId(record.media, metadata)
-      const absolute = absoluteProgress(record, positiveNumber(metadata?.runtimeMs))
+      const contentId = nuvioContentId(record.media)
+      const absolute = absoluteProgress(record)
       if (!contentId || !absolute) {
         skip({ scope: 'progress', status: 'unresolved', media: record.media, reason: 'Nuvio progress needs a supported ID and a reliable runtime to convert this percentage.' })
         continue
@@ -3635,7 +3611,7 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
         progress_key: progressKey
       })
       if (record.media.kind !== 'series' || !record.media.destinationEpisodeRemapped) {
-        for (const legacyId of alternateNuvioContentIds(record.media, contentId, metadata)) {
+        for (const legacyId of alternateNuvioContentIds(record.media, contentId)) {
           legacyKeys.add(record.media.kind === 'series'
             ? `${legacyId}_s${record.media.season}e${record.media.episode}`
             : legacyId)
@@ -3662,38 +3638,31 @@ async function pushNuvio(options: PushOptions): Promise<PushResult> {
     logTo(log, 'Adding items to the Nuvio library...')
     const imports: NuvioLibraryImport[] = []
     for (const record of bundle.library) {
-      const contentId = resolvedNuvioContentId(record.media, metadataByMedia.get(record.media))
+      const contentId = nuvioContentId(record.media)
       if (!contentId) {
         skip({ scope: 'library', status: 'unresolved', media: record.media, reason: 'Nuvio needs a supported content ID for this library item.' })
         continue
       }
+      const posterUrl = publicPosterUrl(record.posterUrl)
       imports.push({
         media: record.media,
         item: {
           content_id: contentId,
           content_type: record.media.kind === 'movie' ? 'movie' : 'series',
           name: record.media.title || 'Untitled',
-          poster: null,
-          poster_shape: 'POSTER',
-          background: null,
-          description: null,
-          release_info: record.media.year ? String(record.media.year) : null,
-          imdb_rating: null,
-          genres: [],
-          addon_base_url: null,
+          ...(posterUrl ? { poster: posterUrl, poster_shape: 'POSTER' } : {}),
+          ...(record.media.year ? { release_info: String(record.media.year) } : {}),
           added_at: record.addedAt || Date.now()
         }
       })
     }
-    enrichNuvioLibraryImports(imports, metadataByMedia)
     if (imports.length) {
       const preferredKeys = new Set(imports.map(({ item }) => (
         `${item.content_type}:${item.content_id}`
       )))
       const aliasKeys = new Map<string, { content_id: string; content_type: string }>()
       for (const { item, media } of imports) {
-        const metadata = metadataByMedia.get(media)
-        for (const contentId of alternateNuvioContentIds(media, item.content_id, metadata)) {
+        for (const contentId of alternateNuvioContentIds(media, item.content_id)) {
           const key = `${item.content_type}:${contentId}`
           if (preferredKeys.has(key)) continue
           aliasKeys.set(key, { content_id: contentId, content_type: item.content_type })
@@ -3739,13 +3708,22 @@ function simklRows(data: any, bucket: 'movies' | 'shows' | 'anime'): any[] {
   return []
 }
 
-function mediaFromSimkl(value: any, kind: 'movie' | 'series'): MediaRef {
+function mediaFromSimkl(value: any, kind: 'movie' | 'series', anime = false): MediaRef {
   return {
     kind,
     ids: normalizeIds(value?.ids, 'simkl'),
     title: value?.title,
-    year: Number(value?.year) || undefined
+    year: Number(value?.year) || undefined,
+    genres: sourceGenres(value, anime ? ['anime'] : [])
   }
+}
+
+function simklPosterUrl(value: unknown): string | undefined {
+  const directUrl = publicPosterUrl(value)
+  if (directUrl) return directUrl
+  const path = String(value || '').trim().replace(/^\/+|\/+$/g, '')
+  if (!path || !/^[a-z0-9/_-]+$/i.test(path)) return undefined
+  return `https://wsrv.nl/?url=https://simkl.in/posters/${path}_m.webp&q=90`
 }
 
 function simklInteger(value: unknown, minimum = 1): number | undefined {
@@ -3809,16 +3787,22 @@ function appendSimklItems(
     if (!subject || typeof subject !== 'object') continue
     const animeMovie = bucket === 'anime'
       && String(item.anime_type || subject.anime_type || '').toLowerCase() === 'movie'
-    const media = mediaFromSimkl(subject, bucket === 'movies' || animeMovie ? 'movie' : 'series')
+    const media = mediaFromSimkl(
+      subject,
+      bucket === 'movies' || animeMovie ? 'movie' : 'series',
+      bucket === 'anime'
+    )
     rememberSimklMediaSnapshot(connection, media)
     const status = String(item.status || subject.status || '').toLowerCase()
 
     if (scopes.library && SIMKL_LIST_STATUS_LABELS[status]) {
+      const posterUrl = simklPosterUrl(subject.poster ?? item.poster)
       bundle.library.push({
         media: { ...media, ids: mergeSimklMediaIds(media.ids, {}) },
         addedAt: asEpochMs(item.added_to_watchlist_at || item.last_watched_at || item.updated_at),
         lists: [{ ...provenance, kind: 'watchlist', name: SIMKL_LIST_STATUS_LABELS[status] }],
-        source: provenance
+        source: provenance,
+        ...(posterUrl ? { posterUrl } : {})
       })
     }
 
@@ -3900,7 +3884,7 @@ function appendSimklPlayback(
     const subject = item.movie || item.show || item.anime
     if (!subject || typeof subject !== 'object') continue
     const isMovie = Boolean(item.movie) || item.type === 'movie'
-    const baseMedia = mediaFromSimkl(subject, isMovie ? 'movie' : 'series')
+    const baseMedia = mediaFromSimkl(subject, isMovie ? 'movie' : 'series', Boolean(item.anime))
     rememberSimklMediaSnapshot(connection, baseMedia)
     let media = baseMedia
     if (!isMovie) {
@@ -5174,7 +5158,7 @@ async function nuvioMetadataAddons(
       } catch (error: any) {
         logTo(
           log,
-          `Warning: Could not read enabled Nuvio add-ons (${error?.message || 'request failed'}); continuing without optional Kitsu enrichment.`
+          `Warning: Could not read enabled Nuvio add-ons (${error?.message || 'request failed'}); continuing without optional Kitsu identity resolution.`
         )
         return []
       }
@@ -5429,7 +5413,7 @@ async function resolveNuvioKitsuContentId(
   }
 }
 
-async function enrichNuvioKitsuAliases(
+async function resolveNuvioKitsuAliases(
   connection: BridgeConnection,
   mediaRefs: readonly MediaRef[],
   log?: BridgeLog
@@ -5449,10 +5433,10 @@ async function enrichNuvioKitsuAliases(
 
   const deadlineController = new AbortController()
   const deadline = setTimeout(() => {
-    const error = new Error('Optional Kitsu identity enrichment reached its overall deadline.')
+    const error = new Error('Optional Kitsu identity resolution reached its overall deadline.')
     error.name = 'TimeoutError'
     deadlineController.abort(error)
-  }, NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS)
+  }, NUVIO_KITSU_RESOLUTION_TIMEOUT_MS)
 
   let addons: NuvioMetaAddon[] = []
   try {
@@ -5461,7 +5445,7 @@ async function enrichNuvioKitsuAliases(
   } catch (error: any) {
     logTo(
       log,
-      `Warning: Kitsu identity enrichment could not start (${error?.message || 'request failed'}); continuing with IMDb/TMDB identities.`
+      `Warning: Kitsu identity resolution could not start (${error?.message || 'request failed'}); continuing with IMDb/TMDB identities.`
     )
     clearTimeout(deadline)
     return
@@ -5523,7 +5507,7 @@ async function enrichNuvioKitsuAliases(
   if (deadlineController.signal.aborted) {
     logTo(
       log,
-      `Warning: Kitsu identity lookup stopped after ${Math.round(NUVIO_KITSU_ENRICHMENT_TIMEOUT_MS / 1_000)} seconds at ${completedCount}/${unresolvedGroups.length}; continuing with IMDb/TMDB identities.`
+      `Warning: Kitsu identity lookup stopped after ${Math.round(NUVIO_KITSU_RESOLUTION_TIMEOUT_MS / 1_000)} seconds at ${completedCount}/${unresolvedGroups.length}; continuing with IMDb/TMDB identities.`
     )
   } else if (failedCount) {
     logTo(

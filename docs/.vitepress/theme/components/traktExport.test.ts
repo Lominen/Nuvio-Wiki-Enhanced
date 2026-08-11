@@ -103,6 +103,67 @@ test('falls back to watched movie and show summaries when event history is absen
   )
 })
 
+test('preserves Trakt genres and normalizes the first valid library poster URL', () => {
+  const result = parseTraktExportEntries({
+    'lists/watchlist.json': json([
+      {
+        type: 'movie',
+        listed_at: '2026-01-01T00:00:00Z',
+        movie: {
+          ...movie,
+          title: 'Absolute poster',
+          ids: { ...movie.ids, trakt: 1001 },
+          genres: ['science-fiction', ' drama ', '', 42],
+          images: {
+            poster: [null, 'http://insecure.example/poster.webp', 'https://cdn.example/absolute.webp']
+          }
+        }
+      },
+      {
+        type: 'show',
+        listed_at: '2026-01-02T00:00:00Z',
+        show: {
+          ...show,
+          title: 'Protocol-relative poster',
+          ids: { ...show.ids, trakt: 1002 },
+          genres: ['drama', 'mystery'],
+          images: { poster: ['//cdn.example/protocol-relative.webp'] }
+        }
+      },
+      {
+        type: 'movie',
+        listed_at: '2026-01-03T00:00:00Z',
+        movie: {
+          ...movie,
+          title: 'Scheme-less poster',
+          ids: { ...movie.ids, trakt: 1003 },
+          images: { poster: ['cdn.example/scheme-less.webp'] }
+        }
+      },
+      {
+        type: 'movie',
+        listed_at: '2026-01-04T00:00:00Z',
+        movie: {
+          ...movie,
+          title: 'No valid poster',
+          ids: { ...movie.ids, trakt: 1004 },
+          genres: ['', 42],
+          images: { poster: ['', '/relative.webp', 'ftp://cdn.example/poster.webp'] }
+        }
+      }
+    ])
+  })
+
+  const records = new Map(result.bundle.library.map(record => [record.media.title, record]))
+  assert.deepEqual(records.get('Absolute poster')?.media.genres, ['science-fiction', 'drama'])
+  assert.equal(records.get('Absolute poster')?.posterUrl, 'https://cdn.example/absolute.webp')
+  assert.deepEqual(records.get('Protocol-relative poster')?.media.genres, ['drama', 'mystery'])
+  assert.equal(records.get('Protocol-relative poster')?.posterUrl, 'https://cdn.example/protocol-relative.webp')
+  assert.equal(records.get('Scheme-less poster')?.posterUrl, 'https://cdn.example/scheme-less.webp')
+  assert.equal(Object.hasOwn(records.get('No valid poster') || {}, 'posterUrl'), false)
+  assert.equal(Object.hasOwn(records.get('No valid poster')?.media || {}, 'genres'), false)
+})
+
 test('reads an official-style Trakt ZIP locally', async () => {
   const zipped = zipSync({
     'trakt-export/watched/watched-movies.json': json([

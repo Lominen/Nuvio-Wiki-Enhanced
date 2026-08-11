@@ -53,12 +53,56 @@ function ids(value: any): MediaRef['ids'] {
   return output
 }
 
+function mediaGenres(value: any): string[] | undefined {
+  if (!Array.isArray(value?.genres)) return undefined
+  const genres = value.genres
+    .filter((genre: unknown): genre is string => typeof genre === 'string')
+    .map((genre: string) => genre.trim())
+    .filter(Boolean)
+  return genres.length ? genres : undefined
+}
+
+function normalizeTraktPosterUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const raw = value.trim()
+  if (!raw || (raw.startsWith('/') && !raw.startsWith('//')) || raw.includes('\\')) return undefined
+
+  const normalized = /^https:\/\//i.test(raw)
+    ? raw
+    : raw.startsWith('//')
+      ? `https:${raw}`
+      : /^[a-z][a-z0-9+.-]*:/i.test(raw)
+        ? null
+        : `https://${raw}`
+  if (!normalized) return undefined
+
+  try {
+    const url = new URL(normalized)
+    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) return undefined
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function traktPosterUrl(value: any): string | undefined {
+  const raw = value?.images?.poster
+  const candidates = Array.isArray(raw) ? raw : [raw]
+  for (const candidate of candidates) {
+    const posterUrl = normalizeTraktPosterUrl(candidate)
+    if (posterUrl) return posterUrl
+  }
+  return undefined
+}
+
 function media(value: any, kind: 'movie' | 'series'): MediaRef {
+  const genres = mediaGenres(value)
   return {
     kind,
     ids: ids(value),
     title: value?.title,
-    year: Number(value?.year) || undefined
+    year: Number(value?.year) || undefined,
+    ...(genres ? { genres } : {})
   }
 }
 
@@ -175,10 +219,12 @@ function parseLibrary(
     const kind = item?.movie || item?.type === 'movie' ? 'movie' : 'series'
     const value = kind === 'movie' ? item?.movie : item?.show
     if (!value) continue
+    const posterUrl = traktPosterUrl(value)
     bundle.library.push({
       media: media(value, kind),
       addedAt: epochMs(item?.listed_at || item?.collected_at || item?.updated_at),
       lists: [{ ...provenance, kind: listKind }],
+      ...(posterUrl ? { posterUrl } : {}),
       source: provenance
     })
   }

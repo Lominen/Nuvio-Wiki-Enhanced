@@ -167,6 +167,7 @@ export interface MediaRef {
   ids: MediaIds
   title?: string
   year?: number
+  genres?: string[]
   season?: number
   episode?: number
   absoluteEpisode?: number
@@ -221,6 +222,7 @@ export interface LibraryRecord {
   media: MediaRef
   addedAt: number
   lists: readonly ListProvenance[]
+  posterUrl?: string
   source?: RecordProvenance
 }
 
@@ -658,7 +660,11 @@ function recordMediaKey(media: MediaRef): string | null {
 function cloneMedia(media: MediaRef): MediaRef {
   const ids: MediaIds = { ...media.ids }
   if (media.ids.external) ids.external = { ...media.ids.external }
-  return { ...media, ids }
+  return {
+    ...media,
+    ids,
+    ...(media.genres ? { genres: [...media.genres] } : {})
+  }
 }
 
 function normalizedTime(value: number): number {
@@ -742,6 +748,7 @@ function dedupeLibrary(records: readonly LibraryRecord[]): LibraryRecord[] {
     index: number
     time: number
     lists: ListProvenance[]
+    posterUrl?: string
   }>()
 
   records.forEach((record, index) => {
@@ -754,11 +761,13 @@ function dedupeLibrary(records: readonly LibraryRecord[]): LibraryRecord[] {
         winner: record,
         index,
         time,
-        lists: [...record.lists]
+        lists: [...record.lists],
+        posterUrl: record.posterUrl
       })
       return
     }
     existing.lists.push(...record.lists)
+    if (record.posterUrl) existing.posterUrl = record.posterUrl
     if (time >= existing.time) {
       existing.winner = record
       existing.index = index
@@ -776,7 +785,8 @@ function dedupeLibrary(records: readonly LibraryRecord[]): LibraryRecord[] {
       ...bucket.winner,
       media: cloneMedia(bucket.winner.media),
       source: bucket.winner.source ? { ...bucket.winner.source } : undefined,
-      lists: mergeListProvenance(bucket.lists)
+      lists: mergeListProvenance(bucket.lists),
+      ...(bucket.posterUrl ? { posterUrl: bucket.posterUrl } : {})
     }))
 }
 

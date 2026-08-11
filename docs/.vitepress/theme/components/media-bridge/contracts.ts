@@ -69,7 +69,6 @@ export interface ProviderAdapter {
 export type BridgeRunPhase =
   | 'validate'
   | 'read'
-  | 'enrich'
   | 'normalize'
   | 'resolve'
   | 'plan'

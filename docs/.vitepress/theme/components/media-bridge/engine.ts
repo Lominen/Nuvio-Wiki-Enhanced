@@ -26,7 +26,7 @@ import {
   type IdentityConflict
 } from './identity.ts'
 import {
-  enrichMediaBridgeBundle,
+  resolveNuvioMediaBridgeBundle,
   type BridgeConnection,
   type BridgeIssue,
   type BridgeLog,
@@ -37,7 +37,7 @@ import { planMediaBridgePreview } from './planner.ts'
 
 export interface MediaBridgeEngineOptions {
   adapters?: Readonly<Record<ServiceId, ProviderAdapter>>
-  enrichBundle?: typeof enrichMediaBridgeBundle
+  resolveNuvioBundle?: typeof resolveNuvioMediaBridgeBundle
 }
 
 export interface MediaBridgeEngineInput {
@@ -363,7 +363,7 @@ export function createMediaBridgeEngine(
   options: MediaBridgeEngineOptions = {}
 ): MediaBridgeEngine {
   const adapters = options.adapters || PROVIDER_ADAPTERS
-  const enrichBundle = options.enrichBundle || enrichMediaBridgeBundle
+  const resolveNuvioBundle = options.resolveNuvioBundle || resolveNuvioMediaBridgeBundle
 
   async function preview(input: MediaBridgeEngineInput): Promise<BridgePreparedPlan> {
     const emit = emitter(input)
@@ -397,18 +397,18 @@ export function createMediaBridgeEngine(
     let sourceBundle = sourceResult.bundle
     let destinationBundle = destinationResult.bundle
     if (input.destination.service === 'nuvio' && input.source.service !== 'nuvio') {
-      emit('enrich', 'Resolving source IMDb/TMDB/Kitsu aliases for Nuvio.', { provider: 'nuvio' })
-      sourceBundle = await enrichBundle(
+      emit('resolve', 'Resolving source Kitsu identities for Nuvio.', { provider: 'nuvio' })
+      sourceBundle = await resolveNuvioBundle(
         sourceBundle,
-        message => emit('enrich', message, { provider: 'nuvio' }),
+        message => emit('resolve', message, { provider: 'nuvio' }),
         input.destination
       )
     }
     if (input.source.service === 'nuvio' && input.destination.service !== 'nuvio') {
-      emit('enrich', 'Resolving destination IMDb/TMDB/Kitsu aliases for Nuvio.', { provider: 'nuvio' })
-      destinationBundle = await enrichBundle(
+      emit('resolve', 'Resolving destination Kitsu identities for Nuvio.', { provider: 'nuvio' })
+      destinationBundle = await resolveNuvioBundle(
         destinationBundle,
-        message => emit('enrich', message, { provider: 'nuvio' }),
+        message => emit('resolve', message, { provider: 'nuvio' }),
         input.source
       )
     }
