@@ -1,7 +1,7 @@
 # Usenet
 
 > [!IMPORTANT]
-> For streaming Usenet a selfhosted AIOStreams instance is required. If you don't have one, you can set it up following [Virens Deployment Guide](https://github.com/Viren070/AIOStreams/wiki/Deployment) or hit me up on [Discord](https://discord.com/users/1111319111977406557).
+> For streaming Usenet a selfhosted AIOStreams instance is required. If you don't have one, you can set it up following [Virens Deployment Guide](https://github.com/Viren070/AIOStreams/wiki/Deployment) or hit me up on [Discord](https://discord.com/users/1111319111977406557), if you can't host AIOStreams yourself.
 
 This doc is to help set up Usenet inside of Aiostreams. Before we jump straight in, however, I'll first give a short crash course on Usenet.
 If you are already familiar with Usenet, feel free to skip straight to the setup guide. If instead you want to learn more on usenet check out [the usenet subreddit and it's wiki](https://www.reddit.com/r/usenet/)
