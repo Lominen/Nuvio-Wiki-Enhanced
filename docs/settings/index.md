@@ -10,13 +10,60 @@ Nuvio's settings allow for deep customization. Below is a detailed breakdown, no
 > Anything not labeled [Android TV Only], [Mobile Only], or [Windows Only] is a feature of all versions.
 
 ## 1. General & UI
-| Setting | Mobile | Android TV | Windows |
-| :--- | :--- | :--- | :--- |
-| **Theme** | Select custom accent color palettes (White, Crimson, Ocean, Violet, Emerald, Amber, Rose). Toggle **AMOLED Black** to use pure black backgrounds for OLED screens. | Select custom accent color palettes (White, Crimson, Ocean, Violet, Emerald, Amber, Rose). Toggle **AMOLED Mode** and **Pure Black Surfaces** to use pure black app backgrounds and card surfaces. | Select custom accent color palettes (White, Crimson, Ocean, Violet, Emerald, Amber, Rose). Toggle **AMOLED Black** to use pure black backgrounds for OLED screens. |
-| **Font & Language** | Adjust global App Language overrides. | Adjust global App Font family choices and App Language overrides. | Adjust global App Language overrides. |
-| **Layout / Home Shelf** | Toggle the **Show Continue Watching** shelf on the Home screen. Select a base home card type: **Card** (TV-style landscape card), **Wide** (info-dense horizontal card), or **Poster** (artwork-first poster card). Toggle **Resume prompt on launch** popups. | Switch home dashboards between Modern View (with dedicated hero panels), Grid View, or Classic View. Toggle Fullscreen Hero Backdrops. Configure auto-collapsing sidebars. | Toggle the **Show Continue Watching** shelf on the Home screen. Select a base home card type. You can enable the **card depth effect**. Toggle **Resume prompt on launch** popups. |
-| **Up Next Behavior** | Configure granular tracking rules: **Prefer Episode Thumbnails**, **Up Next From Furthest Episode** (disable for rewatches to use most recent), **Show Unaired Next Up Episodes**, and **Blur Unwatched** to avoid spoilers. | Configure series playback lines using *Prefer Binge Group* rules, *Reuse Binge Groups*, and variable *Next Episode Threshold Mode* percentages. | Configure granular tracking rules: **Prefer Episode Thumbnails**, **Up Next From Furthest Episode** (disable for rewatches to use most recent), **Show Unaired Next Up Episodes**, and **Blur Unwatched** to avoid spoilers. |
-| **Poster Card Style** | Fine-tune card **Width** (Compact, Dense, Standard, Balanced, Comfort, Large) and **Corner Radius** (Sharp, Subtle, Classic, Rounded, Pill) with a real-time pixel size **Live Preview**. Toggle **Landscape Posters** and **Hide labels**. | Fine-tune card Width metrics (Compact to Large), Corner Radius geometries (Sharp to Pill), and hover **Backdrop Expand Delay** timers. Toggle Landscape Posters. | Fine-tune card Width metrics (Compact to Large), Corner Radius geometries (Sharp to Pill), and hover **Backdrop Expand Delay** timers. Toggle Landscape Posters. |
+<table>
+<thead>
+<tr>
+<th align="left">Setting</th>
+<th align="left">Mobile</th>
+<th align="left">Android TV</th>
+<th align="left">Windows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td rowspan="2" align="left"><strong>Theme</strong></td>
+<td colspan="3" align="left">
+Select custom color palettes:
+<img src="https://placehold.co/16x16/E53935/E53935.png" width="16" height="16" style="border-radius: 50%;" /> Crimson,
+<img src="https://placehold.co/16x16/1E88E5/1E88E5.png" width="16" height="16" style="border-radius: 50%;" /> Ocean,
+<img src="https://placehold.co/16x16/7E57C2/7E57C2.png" width="16" height="16" style="border-radius: 50%;" /> Violet,
+<img src="https://placehold.co/16x16/43A047/43A047.png" width="16" height="16" style="border-radius: 50%;" /> Emerald,
+<img src="https://placehold.co/16x16/E1B300/E1B300.png" width="16" height="16" style="border-radius: 50%;" /> Amber,
+<img src="https://placehold.co/16x16/EC407A/EC407A.png" width="16" height="16" style="border-radius: 50%;" /> Rose,
+<img src="https://placehold.co/16x16/F7F7F4/F7F7F4.png" width="16" height="16" style="border-radius: 50%;" /> White.
+</td>
+</tr>
+<tr>
+<td align="left">Toggle <strong>AMOLED Black</strong> to use pure black backgrounds for OLED screens.</td>
+<td align="left">Toggle <strong>AMOLED Mode</strong> and <strong>Pure Black Surfaces</strong> to use pure black app backgrounds and card surfaces.</td>
+<td align="left">Toggle <strong>AMOLED Black</strong> to use pure black backgrounds for OLED screens.</td>
+</tr>
+<tr>
+<td align="left"><strong>Font & Language</strong></td>
+<td align="left">Adjust global App Language overrides.</td>
+<td align="left">Adjust global App Font family choices and App Language overrides.</td>
+<td align="left">Adjust global App Language overrides.</td>
+</tr>
+<tr>
+<td align="left"><strong>Layout / Home Shelf</strong></td>
+<td align="left">Toggle the <strong>Show Continue Watching</strong> shelf on the Home screen. Select a base home card type: <strong>Card</strong> (TV-style landscape card), <strong>Wide</strong> (info-dense horizontal card), or <strong>Poster</strong> (artwork-first poster card). Toggle <strong>Resume prompt on launch</strong> popups.</td>
+<td align="left">Switch home dashboards between Modern View (with dedicated hero panels), Grid View, or Classic View. Toggle Fullscreen Hero Backdrops. Configure auto-collapsing sidebars.</td>
+<td align="left">Toggle the <strong>Show Continue Watching</strong> shelf on the Home screen. Select a base home card type. You can enable the <strong>card depth effect</strong>. Toggle <strong>Resume prompt on launch</strong> popups.</td>
+</tr>
+<tr>
+<td align="left"><strong>Up Next Behavior</strong></td>
+<td align="left">Configure granular tracking rules: <strong>Prefer Episode Thumbnails</strong>, <strong>Up Next From Furthest Episode</strong> (disable for rewatches to use most recent), <strong>Show Unaired Next Up Episodes</strong>, and <strong>Blur Unwatched</strong> to avoid spoilers.</td>
+<td align="left">Configure series playback lines using <em>Prefer Binge Group</em> rules, <em>Reuse Binge Groups</em>, and variable <em>Next Episode Threshold Mode</em> percentages.</td>
+<td align="left">Configure granular tracking rules: <strong>Prefer Episode Thumbnails</strong>, <strong>Up Next From Furthest Episode</strong> (disable for rewatches to use most recent), <strong>Show Unaired Next Up Episodes</strong>, and <strong>Blur Unwatched</strong> to avoid spoilers.</td>
+</tr>
+<tr>
+<td align="left"><strong>Poster Card Style</strong></td>
+<td align="left">Fine-tune card <strong>Width</strong> (Compact, Dense, Standard, Balanced, Comfort, Large) and <strong>Corner Radius</strong> (Sharp, Subtle, Classic, Rounded, Pill) with a real-time pixel size <strong>Live Preview</strong>. Toggle <strong>Landscape Posters</strong> and <strong>Hide labels</strong>.</td>
+<td colspan="2" align="left">
+Fine-tune card Width metrics (Compact to Large), Corner Radius geometries (Sharp to Pill), and hover <strong>Backdrop Expand Delay</strong> timers. Toggle Landscape Posters.</td>
+</tr>
+</tbody>
+</table>
 
 [Back to top](#settings-breakdown)
 
