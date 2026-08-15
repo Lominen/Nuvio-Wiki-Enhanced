@@ -572,7 +572,7 @@ MPV is a highly advanced, open-source media player engine built into Nuvio as an
 ### Why is MPV especially good for Anime?
 Anime relies heavily on a complex subtitle format called **ASS/SSA**. These aren't just plain text at the bottom of the screen; they include custom fonts, colors, animations, and precise on-screen positioning (like translating a Japanese sign in the background or showing bouncing karaoke lyrics). Standard players often struggle to render these correctly, leading to lag or missing text. MPV is widely considered the gold standard for rendering these complex anime subtitles flawlessly without dropping video frames.
 
-### MPV Options Explained [Android TV Only]
+### MPV Options Explained
 
 The MPV configuration in Nuvio currently focuses on **Hardware Decoding**. This tells the player how it should utilize your device's physical chips to process the video.
 
@@ -599,7 +599,7 @@ The Mobile app exposes additional libmpv configuration options:
   - *GPU:* The legacy GPU rendering path. Use as a fallback if *GPU next* causes visual artifacts.
 - **libmpv YUV420P Compatibility:** Forces libmpv to use YUV420P pixel format output for maximum compatibility with device display pipelines. Enable this if you experience color issues or rendering glitches with specific video files on your mobile device.
 
-### Recommended Device Settings [Android TV Only]
+### Recommended Device Settings
 
 - **For General Viewing:** Set to **Auto (auto-safe)** or **Hardware (direct)**. This will give you the best battery life and the smoothest playback for standard movies and TV shows.
 - **For Anime Watchers:** Set to **Hardware (copy) (mediacodec-copy)**. If you are watching anime with heavy, stylized subtitles and notice visual glitches or black screens, "copy" mode ensures the subtitles can be properly layered over the video.
