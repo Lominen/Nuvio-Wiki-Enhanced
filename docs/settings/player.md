@@ -23,6 +23,9 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 2. Select **Playback**
 3. Toggle the options under **Skip Segments**
 
+> [!TIP]
+> You can also submit intros and Outros to IntroDB within Nuvio [Mobile Windows]. Click [here](#submitting-introdb) to learn how.
+
 <a name="animeskip-id"></a>
 **To obtain a free Anime Skip Client ID:**
 1. Go to [Anime Skip](https://anime-skip.com).
@@ -35,6 +38,7 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 8. Copy the generated Client ID (a long string of numbers and letters).
 9. Go back into Nuvio, paste the Client ID, and select **Save**.
 
+<a name="submitting-introdb"></a>
 **To submit Intros and Outros to IntroDB** [Mobile Windows]:
 
 Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
