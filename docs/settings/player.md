@@ -421,7 +421,7 @@ Compare **Baseline** to the best **Parallel** row:
 ### Recommended Device Configurations
 
 > [!TIP]
-> Short on time? Jump straight to the [Quick Setup Guide](#quick-i-just-want-it-to-work-path) to get up and running without configuring every detail.
+> Jump straight to the [Quick "I just want it to work" path](#quick-i-just-want-it-to-work-path) to get up and running without configuring every detail.
 
 Nuvio detects physical device RAM and maps it to a **Recommended Safety Limit** for target buffer allocations. Use the readout under **ExoPlayer Native Memory** (for example Device Memory: 4 GB, Recommended Safety Limit: 1000 MB) to identify your tier, then apply the matching profile below.
 
