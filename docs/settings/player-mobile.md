@@ -1,4 +1,4 @@
-# Nuvio Player Settings
+# Nuvio Player Settings [Mobile Only]
 
 Nuvio offers a variety of player settings to customize your experience.
 
@@ -51,7 +51,7 @@ Nuvio allows you to submit timestamps to IntroDB's community-sourced database. Y
 
 - **Content Warnings:** Show parental guidance overlay when playback starts.
 
-[Back to top](#Nuvio-player-settings)
+[Back to top](#Nuvio-player-settings-mobile-only)
 
 ---
 
