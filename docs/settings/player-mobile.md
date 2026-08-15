@@ -18,9 +18,9 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
     - Requires an ID and configuration to use. Click [here](#animeskip-id) to learn how.
 
 **To toggle these features:**
-1. Go to **Settings**
-2. Select **Playback**
-3. Toggle the options under **Skip Segments**
+1. Go to **Settings**.
+2. Select **Playback**.
+3. Toggle the options under **Skip Segments**.
 
 > [!TIP]
 > You can also submit intros and outros to IntroDB from within Nuvio [Mobile Windows]. Click [here](#submitting-introdb) to learn how.
