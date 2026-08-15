@@ -1,9 +1,10 @@
 # Nuvio Player Settings [Mobile Only]
 
+> [!NOTE]
+> This section is tailored only for the mobile app's player settings. If you want to check out the wiki for all devices, go [here](.
+
 Nuvio offers a variety of player settings to customize your experience.
 
-> [!IMPORTANT]
-> Anything not labeled [Android TV Only], [Mobile Only], or [Windows Only] is available on Mobile, Android TV, and Windows.
 
 ---
 
@@ -26,28 +27,7 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 > [!TIP]
 > You can also submit intros and outros to IntroDB from within Nuvio [Mobile Windows]. Click [here](#submitting-introdb) to learn how.
 
-<a name="animeskip-id"></a>
-**To obtain a free Anime Skip Client ID:**
-1. Go to [Anime Skip](https://anime-skip.com).
-2. Create an account.
-3. Once logged in, go to your profile.
-4. Select **API Clients**.
-5. Select **Add a New Client**.
-6. Enter the app name "Nuvio" and a description of "Nuvio".
-7. Select **Create**.
-8. Copy the generated Client ID (a long string of numbers and letters).
-9. Go back into Nuvio, paste the Client ID, and select **Save**.
 
-<a name="submitting-introdb"></a>
-**To submit Intros and Outros to IntroDB** [Mobile Windows]:
-
-Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
-1. Go to [Intro DB](https://introdb.app).
-2. Create an account.
-3. Once logged in, go to **Account Settings**.
-4. Select **Generate Key**.
-5. Copy the key.
-6. Go back into Nuvio, paste the API key, and select **Save**.
 
 - **Content Warnings:** Show parental guidance overlay when playback starts.
 
@@ -597,3 +577,34 @@ The Mobile app exposes additional libmpv configuration options:
 - **For Troubleshooting:** If a specific video file is playing with a green screen, distorted colors, or just audio with no picture, change this to **Disabled (no)**. Forcing software decoding will usually bypass hardware incompatibilities and allow the file to play.
 
 [Back to top](#Nuvio-player-settings)
+
+---
+
+<a name="animeskip-id"></a>
+### AnimeSkip Client ID
+
+**To obtain a free Anime Skip Client ID:**
+1. Go to [Anime Skip](https://anime-skip.com).
+2. Create an account.
+3. Once logged in, go to your profile.
+4. Select **API Clients**.
+5. Select **Add a New Client**.
+6. Enter the app name "Nuvio" and a description of "Nuvio".
+7. Select **Create**.
+8. Copy the generated Client ID (a long string of numbers and letters).
+9. Go back into Nuvio, paste the Client ID, and select **Save**.
+
+---
+
+<a name="submitting-introdb"></a>
+### Submitting Intros and Outros
+
+**To submit Intros and Outros to IntroDB** [Mobile Windows]:
+
+Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
+1. Go to [Intro DB](https://introdb.app).
+2. Create an account.
+3. Once logged in, go to **Account Settings**.
+4. Select **Generate Key**.
+5. Copy the key.
+6. Go back into Nuvio, paste the API key, and select **Save**.
