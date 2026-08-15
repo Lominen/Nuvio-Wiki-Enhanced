@@ -121,11 +121,11 @@ These settings determine the default spoken language tracks selected when a stre
 - **Secondary Audio Language:** Your fallback audio track if the primary choice is unavailable.
 - **Skip Silence** [Android TV Only]: Dynamically skips silent portions of audio during playback.
 - **Remember audio delay per device** [Android TV Only]: Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
-- **Enable downmix** [Android TV Only]: Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
+- **Enable downmix:** Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
   - "Downmixing" means taking a massive surround sound audio track (like 5.1 or 7.1 audio meant for 6 to 8 speakers) and squishing it down into just two channels (Left and Right) for a standard stereo setup.
   - If you are just using your built-in TV speakers or a basic 2.0 soundbar, your system physically cannot play the dedicated "center channel" where 90% of the dialogue comes from in modern movies. If you ever feel like the explosions are deafening but the actors' voices are whispering, it is because you are missing the center channel. Turning this on forces the app to correctly blend all those surround sound speakers into a stereo format so you can hear the voices clearly.
-- **Maintain original audio on downmix** [Android TV Only]: When enabled, preserves the original audio track alongside the downmixed stereo output. Useful if you switch between speaker setups.
-- **Number of channels** [Android TV Only]: Sets the output channel configuration. Options include 2.0 (Stereo), 5.1, 6.1, and 7.1. Choose the configuration that matches your speaker or soundbar setup.
+- **Maintain original audio on downmix:** When enabled, preserves the original audio track alongside the downmixed stereo output. Useful if you switch between speaker setups.
+- **Number of channels:** Sets the output channel configuration. Options include 2.0 (Stereo), 5.1, 6.1, and 7.1. Choose the configuration that matches your speaker or soundbar setup.
 
 ### Subtitle Preferences
 These configurations control which text translations are displayed on screen and how menus are filtered.
