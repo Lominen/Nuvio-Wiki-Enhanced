@@ -139,12 +139,24 @@ Controls how aggressively Nuvio searches for external subtitles when a video beg
   - **Fast startup:** Prioritizes immediate video playback by skipping the automatic fetch of external addon subtitles. You must manually request them from within the player.
   - **Preferred only:** A balanced approach. Fetches subtitles from addons during the initial load, but only pulls those matching your language preferences.
   - **All subtitles:** Fetches and loads every available addon subtitle for the video, maximizing choice at the cost of slightly longer loading times.
-
-### Subtitle Styling
-Offers granular control over subtitle aesthetics including **Size (Scaling)**, **Vertical Offset** (to accommodate letterboxing), **Text Color**, **Background Color**, **Outline/Outline Color**, and **Bold** (use bold font weight for subtitles).
-- **<ins>Use libass for ASS/SSA subtitles</ins>:** An experimental toggle to use the advanced libass engine for rendering complex styles, positioning, and animations of ASS/SSA subtitles.
-  - Turning this on tells the player to use a specialized graphics engine (libass) to draw complex subtitles perfectly. If left off, the player might strip out all the colors and placement formatting, or worse, crash trying to read the file.
-  - *Libass Render Mode* [Android TV Only]: When libass is enabled, select the exact rendering pipeline: *Overlay OpenGL* (Recommended for best quality and HDR support), *Overlay Canvas* (HDR support without OpenGL), *Effects OpenGL* (Animation support with Media3 effects), *Effects Canvas*, or *Standard Cues* (Basic subtitle rendering without animation).
+ 
+### Subtitle Appearance & Rendering
+Offers granular control over subtitle aesthetics, text positioning, and playback engine pipelines.
+- **Styling & Positioning**
+  - **Size (Scaling):** Adjust overall subtitle font size.
+  - **Vertical Offset:** Shift subtitle position vertically to accommodate letterboxing.
+  - **Bold:** Enable bold font weight for subtitles.
+  - **Text Color:** Select the primary font color for subtitle text.
+  - **Background & Outline:** Customize Background Color, Outline, and Outline Color for legibility.
+- **Rendering Engine**
+  - **Use libass for ASS/SSA subtitles:** An experimental toggle to use the advanced libass engine for rendering complex styles, positioning, and animations of ASS/SSA subtitles.
+    - Turning this on tells the player to use a specialized graphics engine (libass) to draw complex subtitles perfectly. If left off, the player might strip out all the colors and placement formatting, or worse, crash trying to read the file.
+  - **Libass Render Mode** [Android TV Only]: When libass is enabled, select the exact rendering pipeline:
+    - **Overlay OpenGL** (Recommended for best quality and HDR support)
+    - **Overlay Canvas** (HDR support without OpenGL)
+    - **Effects OpenGL** (Animation support with Media3 effects)
+    - **Effects Canvas**
+    - **Standard Cues** (Basic subtitle rendering without animation)
 
 [Back to top](#Nuvio-player-settings)
 
@@ -193,8 +205,8 @@ Technical settings that determine how your device's hardware and software proces
   - Older optical audio cables (the ones with the glowing red light) have a strict bandwidth limit. They physically cannot transmit heavy, modern, uncompressed audio formats like TrueHD or DTS-HD. They max out at standard Dolby Digital 5.1 (also known as AC-3).
   - If you have an older AV receiver or soundbar hooked up to your TV via an optical cable, trying to play a modern 4K movie with a TrueHD track will result in dead silence or horrible static. This setting acts as a live translator. It grabs the heavy modern audio and instantly crushes it down into standard Dolby Digital 5.1 on the fly, ensuring your older sound system can actually play the movie.
  
-> [!TIP]
-> Check out [Additional MPV Options for Mobile devices](#additional-mpv-options-mobile-only)!
+> [!NOTE]
+> Also check out [Additional MPV Options for Mobile devices](#additional-mpv-options-mobile-only).
 
 [Back to top](#Nuvio-player-settings)
 
@@ -209,7 +221,7 @@ They live together under **Settings → Playback → Buffer & Network**, but the
 - **[ExoPlayer Native Memory](#exoplayer-native-memory):** Optional engine path for how the buffer is stored in RAM.
 - **[Custom Playback Buffers](#custom-playback-buffers):** Time windows and target size for ahead-buffering. Works with or without Native Memory.
 - **[Disk Cache](#disk-cache):** Optional on-disk progressive cache.
-- **[Custom Network / Parallel Connections](#network-&-p2p):** Multi-connection downloads for progressive streams. Works with or without Native Memory.
+- **[Custom Network / Parallel Connections](#network--p2p):** Multi-connection downloads for progressive streams. Works with or without Native Memory.
 
 > [!IMPORTANT]
 > These options exist on the **Android TV** build of Nuvio only. They are not available on Mobile, iOS, or webOS.
@@ -409,7 +421,7 @@ Compare **Baseline** to the best **Parallel** row:
 ### Recommended Device Configurations
 
 > [!TIP]
-> Jump straight to [Quick “I just want it to work” path](#quick-i-just-want-it-to-work-path) if you don't want to go through the details.
+> Short on time? Jump straight to the [Quick Setup Guide](#quick-i-just-want-it-to-work-path) to get up and running without configuring every detail.
 
 Nuvio detects physical device RAM and maps it to a **Recommended Safety Limit** for target buffer allocations. Use the readout under **ExoPlayer Native Memory** (for example Device Memory: 4 GB, Recommended Safety Limit: 1000 MB) to identify your tier, then apply the matching profile below.
 
