@@ -119,8 +119,8 @@ The Next Episode category includes several settings to optimize continuous viewi
 These settings determine the default spoken language tracks selected when a stream starts.
 - **Preferred Audio Language:** The primary spoken language you want the application to automatically select if the media file contains multiple audio tracks.
 - **Secondary Audio Language:** Your fallback audio track if the primary choice is unavailable.
-- **Skip Silence** [Android TV Only]: Dynamically skips silent portions of audio during playback.
-- **Remember audio delay per device** [Android TV Only]: Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
+- **Skip Silence:** Dynamically skips silent portions of audio during playback.
+- **Remember audio delay per device:** Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
 - **Enable downmix:** Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
   - "Downmixing" means taking a massive surround sound audio track (like 5.1 or 7.1 audio meant for 6 to 8 speakers) and squishing it down into just two channels (Left and Right) for a standard stereo setup.
   - If you are just using your built-in TV speakers or a basic 2.0 soundbar, your system physically cannot play the dedicated "center channel" where 90% of the dialogue comes from in modern movies. If you ever feel like the explosions are deafening but the actors' voices are whispering, it is because you are missing the center channel. Turning this on forces the app to correctly blend all those surround sound speakers into a stereo format so you can hear the voices clearly.
