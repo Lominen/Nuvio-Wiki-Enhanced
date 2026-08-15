@@ -19,37 +19,12 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 - **Automatic Skipping** [Android TV Only]: Choose which segments (intros, outros, and recaps) skip automatically without prompting.
 
 **To toggle these features:**
-1. Go to **Settings**
-2. Select **Playback**
-3. Toggle the options under **Skip Segments**
+1. Go to **Settings**.
+2. Select **Playback**.
+3. Toggle the options under **Skip Segments**.
 
 > [!TIP]
 > You can also submit intros and outros to IntroDB from within Nuvio [Mobile Windows]. Click [here](#submitting-introdb) to learn how.
-
-<a name="animeskip-id"></a>
-**To obtain a free Anime Skip Client ID:**
-1. Go to [Anime Skip](https://anime-skip.com).
-2. Create an account.
-3. Once logged in, go to your profile.
-4. Select **API Clients**.
-5. Select **Add a New Client**.
-6. Enter the app name "Nuvio" and a description of "Nuvio".
-7. Select **Create**.
-8. Copy the generated Client ID (a long string of numbers and letters).
-9. Go back into Nuvio, paste the Client ID, and select **Save**.
-
-<a name="submitting-introdb"></a>
-**To submit Intros and Outros to IntroDB** [Mobile Windows]:
-
-Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
-1. Go to [Intro DB](https://introdb.app).
-2. Create an account.
-3. Once logged in, go to **Account Settings**.
-4. Select **Generate Key**.
-5. Copy the key.
-6. Go back into Nuvio, paste the API key, and select **Save**.
-
-- **Content Warnings:** Show parental guidance overlay when playback starts.
 
 [Back to top](#Nuvio-player-settings)
 
@@ -164,6 +139,7 @@ Controls the visual experience and interactions within the media player.
 
 - **Loading Overlay:** Displays a continuous loading screen or graphic to hide buffering, black screens, or transitions. The overlay remains visible until the first frame of the video is ready.
 - **Pause Overlay:** Shows a details overlay after 5 seconds while playback is paused.
+- **Content Warnings:** Show parental guidance overlay when playback starts.
 - **OSD Clock** [Android TV Only]: Shows the current time and estimated end time while the transport controls are visible on screen.
 - **Player:** Choose between internal and external player.
   - *Internal:* Keeps you inside Nuvio using its native player.
@@ -612,3 +588,33 @@ The Mobile app exposes additional libmpv configuration options:
 
 ---
 
+<a name="animeskip-id"></a>
+### AnimeSkip Client ID
+
+**To obtain a free Anime Skip Client ID:**
+1. Go to [Anime Skip](https://anime-skip.com).
+2. Create an account.
+3. Once logged in, go to your profile.
+4. Select **API Clients**.
+5. Select **Add a New Client**.
+6. Enter the app name "Nuvio" and a description of "Nuvio".
+7. Select **Create**.
+8. Copy the generated Client ID (a long string of numbers and letters).
+9. Go back into Nuvio, paste the Client ID, and select **Save**.
+
+---
+
+<a name="submitting-introdb"></a>
+### Submitting Intros and Outros
+
+**To submit Intros and Outros to IntroDB** [Mobile Windows]:
+
+Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
+1. Go to [Intro DB](https://introdb.app).
+2. Create an account.
+3. Once logged in, go to **Account Settings**.
+4. Select **Generate Key**.
+5. Copy the key.
+6. Go back into Nuvio, paste the API key, and select **Save**.
+
+[Back to top](#nuvio-player-settings)
