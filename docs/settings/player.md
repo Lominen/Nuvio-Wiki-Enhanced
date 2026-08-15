@@ -11,14 +11,19 @@ Nuvio offers a variety of player settings to customize your experience.
 
 Nuvio uses three separate databases for intro and outro skipping, prioritized in this order: **IntroDB**, **AniSkip**, and **Anime Skip**.
 
-- **IntroDB** and **AniSkip** can be toggled on or off directly.
-- **Anime Skip** requires an ID and configuration to use.
+- **IntroDB** and **AniSkip**
+    - Can be toggled on or off directly.
+- **Anime Skip**
+    - Requires an ID and configuration to use. Click [here](#animeskip-id) to learn how.
+
+- **Automatic Skipping** [Android TV Only]: Choose which segments (intros, outros, and recaps) skip automatically without prompting.
 
 **To toggle these features:**
-1. Go to **Settings**.
-2. Select **Playback**.
-3. Select **Skip Segments**.
+1. Go to **Settings**
+2. Select **Playback**
+3. Toggle the options under **Skip Segments**
 
+<a name="animeskip-id"></a>
 **To obtain a free Anime Skip Client ID:**
 1. Go to [Anime Skip](https://anime-skip.com).
 2. Create an account.
@@ -40,9 +45,7 @@ Nuvio allows you to submit timestamps to IntroDB's community-sourced database. Y
 5. Copy the key.
 6. Go back into Nuvio, paste the API key, and select **Save**.
 
-**Automatic Skipping & Content Warnings**:
 - **Content Warnings:** Show parental guidance overlay when playback starts.
-- **Automatic Skipping** [Android TV Only]: Choose which segments (intros, outros, and recaps) skip automatically without prompting.
 
 [Back to top](#Nuvio-player-settings)
 
