@@ -99,11 +99,11 @@ The Next Episode category includes several settings to optimize continuous viewi
 - **Prefer Binge Group:** Nuvio will try to find the next episode using the same source profile before falling back to other options. For example, if you watched an episode via *AIOStreams*, Nuvio will attempt to find the next episode from *AIOStreams* in the same quality before trying other providers.
 - **Reuse Binge Groups:** Ensures that when you return to a TV series, the app automatically remembers and prioritizes the exact same stream source or release group you were previously watching. If you selected a specific 1080p release group, your session anchors to that profile. When resuming from "Continue Watching," Nuvio will specifically look for that exact release group rather than auto-selecting a new source.
 - **Next Episode Threshold Mode:** Used as a fallback if no outro skip is present. This can be set in 0.5% increments from 100% down to 97%.
-  - **Percentage:** This can be set in 0.5% increments from 100% down to 97%.
+  - **Percentage:** Adjustable in 0.5% increments from 100% down to 97%.
     - *At 100%:* Nuvio will not begin the source selection process until the media is completely finished.
-    - *At 97%:* Nuvio will begin the source selection process when the media is 97% complete (e.g., for a 30-minute show, selection begins at 29 minutes and 6 seconds).
-  - **Minutes before end:** This can be set in increments of 0.5 minutes, from 3.5 minutes down to 0 minutes.
-    - *At 3.5 min:* Nuvio will begin the source selection process when the media has 3.5 minutes left.
+    - *At 97%:* Nuvio begins the source selection process when the media is 97% complete (e.g., for a 30-minute episode, selection starts at 29 minutes and 6 seconds).
+  - **Minutes before end:** Adjustable in 0.5-minute increments from 3.5 minutes down to 0 minutes.
+    - *At 3.5 min:* Nuvio begins the source selection process when 3.5 minutes remain in playback.
     - *At 0 min:* Nuvio will not begin the source selection process until the media is completely finished.
 - **Are You Still Watching?** [Android TV Only]: Prompts the user after a set number of consecutive auto-played episodes to prevent infinite playback if you fall asleep.
   - **Episode Threshold:** Configures the number of consecutive auto-played episodes before the prompt appears.
