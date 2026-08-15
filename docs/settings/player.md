@@ -182,7 +182,7 @@ Controls the visual experience and interactions within the media player.
 ### Advanced Processing & Decoding
 Technical settings that determine how your device's hardware and software process raw video and audio data.
 
-- **Playback Engine:** Dictates which video engine handles your streams. Choose between **ExoPlayer**, **Libmpv (Beta)**, or **Auto (Best for Content)** (automatically uses ExoPlayer for Movies/TV Shows and MPV for Anime—[see why](#mpv)).
+- **Playback Engine:** Dictates which video engine handles your streams. Choose between **ExoPlayer**, **Libmpv (Beta)**, or **Auto (Best for Content)** (automatically uses ExoPlayer for Movies/TV Shows and MPV for Anime ([see why](#mpv)).
 - **Auto-switch engine on startup error** [Android TV Only]: Automatically falls back from ExoPlayer to libmpv for detected anime or if a stream fails to initialize.
 - **Decoder Priority:** Controls whether hardware or software (FFmpeg) decoders are used for audio and video.
   - *Device decoders only:* Only use built-in hardware decoders. Most compatible but may not support all formats.
