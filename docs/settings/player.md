@@ -212,13 +212,18 @@ These configurations govern internal memory allocation thresholds, local system 
 
 They live together under **Settings → Playback → Buffer & Network**, but they are **not all the same feature**:
 
-- **ExoPlayer Native Memory:** Optional engine path for how the buffer is stored in RAM.
-- **Custom Playback Buffers:** Time windows and target size for ahead-buffering. Works with or without Native Memory.
-- **Disk Cache:** Optional on-disk progressive cache.
-- **Custom Network / Parallel Connections:** Multi-connection downloads for progressive streams. Works with or without Native Memory.
+- **[ExoPlayer Native Memory](#exoplayer-native-memory):** Optional engine path for how the buffer is stored in RAM.
+- **[Custom Playback Buffers](#custom-playback-buffers):** Time windows and target size for ahead-buffering. Works with or without Native Memory.
+- **[Disk Cache](#disk-cache):** Optional on-disk progressive cache.
+- **[Custom Network / Parallel Connections](#network-&-p2p):** Multi-connection downloads for progressive streams. Works with or without Native Memory.
 
 > [!IMPORTANT]
 > These options exist on the **Android TV** build of Nuvio only. They are not available on Mobile, iOS, or webOS.
+
+> [!TIP]
+> Also check out [Buffer & Network Tips](#buffer-&-network-tips).
+
+[Back to top](#nuvio-player-settings)
 
 ---
 
@@ -317,14 +322,14 @@ Establishes fixed storage caching partitions that extend protection beyond pure 
 Deploys download-path controls that determine how aggressively progressive and torrent-style sources are fetched. These options are **independent of Native Memory**. You can use Parallel Connections with Native Memory off, or leave parallel off while Native Memory is on.
 
 - **Custom Network:** Master toggle for multi-connection progressive downloads. When off, the player uses a single connection for the stream.
-- **Enable HTTP/2:** Enables HTTP/2 protocol handling for supported endpoints, allowing request multiplexing and faster handshake times.
 - **Parallel Connections:** When Custom Network is on, downloads different byte ranges of a progressive file (MKV/MP4) across multiple TCP connections simultaneously. HLS/DASH already segment their own downloads and do not use this path.
+- **Enable HTTP/2:** Enables HTTP/2 protocol handling for supported endpoints, allowing request multiplexing and faster handshake times.
 - **Connection Count:** Number of concurrent range connections. Higher values can raise throughput on CDNs that throttle per connection, but also increase memory and connection overhead.
 - **Chunk Size:** Size of each range request piece per connection. Larger chunks reduce request overhead; smaller chunks can adapt faster on some hosts.
 - **P2P Streaming:** Enables or restricts direct processing configurations for raw peer-to-peer (torrent) streams.
+- **Hide torrent stats:** Suppresses real-time peer connection logs, seed counts, and download speed overlays from appearing during loading and playback screens.
 - **Torrent profile** [Mobile Only]: Selects the torrent client configuration profile used for P2P streaming on mobile devices.
 - **Torrent cache size** [Mobile Only]: Sets the maximum disk cache allocated for torrent stream data on mobile devices.
-- **Hide torrent stats:** Suppresses real-time peer connection logs, seed counts, and download speed overlays from appearing during loading and playback screens.
 
 #### Why parallel connections exist
 
@@ -413,6 +418,9 @@ Compare **Baseline** to the best **Parallel** row:
 ---
 
 ### Recommended Device Configurations
+
+> [!TIP]
+> You can jump straight to [Quick “I just want it to work” path](#quick-i-just-want-it-to-work-path) if you don't want to study the details.
 
 Nuvio detects physical device RAM and maps it to a **Recommended Safety Limit** for target buffer allocations. Use the readout under **ExoPlayer Native Memory** (for example Device Memory: 4 GB, Recommended Safety Limit: 1000 MB) to identify your tier, then apply the matching profile below.
 
@@ -563,7 +571,7 @@ MPV is a highly advanced, open-source media player engine built into Nuvio as an
 ### Why is MPV especially good for Anime?
 Anime relies heavily on a complex subtitle format called **ASS/SSA**. These aren't just plain text at the bottom of the screen; they include custom fonts, colors, animations, and precise on-screen positioning (like translating a Japanese sign in the background or showing bouncing karaoke lyrics). Standard players often struggle to render these correctly, leading to lag or missing text. MPV is widely considered the gold standard for rendering these complex anime subtitles flawlessly without dropping video frames.
 
-### MPV Options Explained
+### MPV Options Explained [Android TV Only]
 
 The MPV configuration in Nuvio currently focuses on **Hardware Decoding**. This tells the player how it should utilize your device's physical chips to process the video.
 
@@ -590,9 +598,7 @@ The Mobile app exposes additional libmpv configuration options:
   - *GPU:* The legacy GPU rendering path. Use as a fallback if *GPU next* causes visual artifacts.
 - **libmpv YUV420P Compatibility:** Forces libmpv to use YUV420P pixel format output for maximum compatibility with device display pipelines. Enable this if you experience color issues or rendering glitches with specific video files on your mobile device.
 
----
-
-### Recommended Device Settings
+### Recommended Device Settings for MPV [Android TV Only]
 
 - **For General Viewing:** Set to **Auto (auto-safe)** or **Hardware (direct)**. This will give you the best battery life and the smoothest playback for standard movies and TV shows.
 - **For Anime Watchers:** Set to **Hardware (copy) (mediacodec-copy)**. If you are watching anime with heavy, stylized subtitles and notice visual glitches or black screens, "copy" mode ensures the subtitles can be properly layered over the video.
@@ -602,5 +608,7 @@ The Mobile app exposes additional libmpv configuration options:
 
 - **For Troubleshooting:** If a specific video file is playing with a green screen, distorted colors, or just audio with no picture, change this to **Disabled (no)**. Forcing software decoding will usually bypass hardware incompatibilities and allow the file to play.
 
-[Back to top](#Nuvio-player-settings)
+[Back to top](#nuvio-player-settings)
+
+---
 
