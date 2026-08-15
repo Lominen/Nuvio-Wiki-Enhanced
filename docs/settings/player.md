@@ -140,16 +140,18 @@ These configurations control which text translations are displayed on screen and
 - **Secondary Preferred Language:** Your fallback subtitle language.
 - **Use Forced Subtitles (Toggle On/Off):** Prioritizes "forced" subtitles that match your preferred language. Forced subtitles translate foreign languages, alien dialogue, or on-screen text while the rest of the media remains in your primary spoken language.
 - **Show Only Preferred Languages (Toggle On/Off):** Filters the subtitle menu to hide all tracks except those that exactly match your primary and secondary language preferences.
-- **Subtitle Styling:** Offers granular control over subtitle aesthetics including **Size (Scaling)**, **Vertical Offset** (to accommodate letterboxing), **Text Color**, **Background Color**, **Outline/Outline Color**, and **Bold** (use bold font weight for subtitles).
-- **Use libass for ASS/SSA subtitles:** An experimental toggle to use the advanced libass engine for rendering complex styles, positioning, and animations of ASS/SSA subtitles.
-  - Turning this on tells the player to use a specialized graphics engine (libass) to draw complex subtitles perfectly. If left off, the player might strip out all the colors and placement formatting, or worse, crash trying to read the file.
-  - *Libass Render Mode* [Android TV Only]: When libass is enabled, select the exact rendering pipeline: *Overlay OpenGL* (Recommended for best quality and HDR support), *Overlay Canvas* (HDR support without OpenGL), *Effects OpenGL* (Animation support with Media3 effects), *Effects Canvas*, or *Standard Cues* (Basic subtitle rendering without animation).
 
 ### Addon Subtitle Startup
 Controls how aggressively Nuvio searches for external subtitles when a video begins playing, balancing load times against availability.
-- **Fast startup:** Prioritizes immediate video playback by skipping the automatic fetch of external addon subtitles. You must manually request them from within the player.
-- **Preferred only:** A balanced approach. Fetches subtitles from addons during the initial load, but only pulls those matching your language preferences.
-- **All subtitles:** Fetches and loads every available addon subtitle for the video, maximizing choice at the cost of slightly longer loading times.
+  - **Fast startup:** Prioritizes immediate video playback by skipping the automatic fetch of external addon subtitles. You must manually request them from within the player.
+  - **Preferred only:** A balanced approach. Fetches subtitles from addons during the initial load, but only pulls those matching your language preferences.
+  - **All subtitles:** Fetches and loads every available addon subtitle for the video, maximizing choice at the cost of slightly longer loading times.
+
+### Subtitle Styling
+Offers granular control over subtitle aesthetics including **Size (Scaling)**, **Vertical Offset** (to accommodate letterboxing), **Text Color**, **Background Color**, **Outline/Outline Color**, and **Bold** (use bold font weight for subtitles).
+- **<ins>Use libass for ASS/SSA subtitles</ins>:** An experimental toggle to use the advanced libass engine for rendering complex styles, positioning, and animations of ASS/SSA subtitles.
+  - Turning this on tells the player to use a specialized graphics engine (libass) to draw complex subtitles perfectly. If left off, the player might strip out all the colors and placement formatting, or worse, crash trying to read the file.
+  - *Libass Render Mode* [Android TV Only]: When libass is enabled, select the exact rendering pipeline: *Overlay OpenGL* (Recommended for best quality and HDR support), *Overlay Canvas* (HDR support without OpenGL), *Effects OpenGL* (Animation support with Media3 effects), *Effects Canvas*, or *Standard Cues* (Basic subtitle rendering without animation).
 
 [Back to top](#Nuvio-player-settings)
 
@@ -163,18 +165,19 @@ Controls the visual experience and interactions within the media player.
 - **Loading Overlay:** Displays a continuous loading screen or graphic to hide buffering, black screens, or transitions. The overlay remains visible until the first frame of the video is ready.
 - **Pause Overlay:** Shows a details overlay after 5 seconds while playback is paused.
 - **OSD Clock** [Android TV Only]: Shows the current time and estimated end time while the transport controls are visible on screen.
-- **Player:** Dictates which video engine handles your streams.
+- **Player:** Choose between internal and external player.
   - *Internal:* Keeps you inside Nuvio using its native player.
-  - *Internal Engine:* Choose between **ExoPlayer**, **Libmpv (Beta)**, or **Auto (Best for Content)** (automatically uses ExoPlayer for Movies/TV Shows and MPV for Anime).
-  - *Auto-switch engine on startup error* [Android TV Only]: Automatically falls back from ExoPlayer to libmpv for detected anime or if a stream fails to initialize.
   - *External:* Passes the video link to a third-party application installed on your device (e.g., VLC, MX Player).
-- **Hold To Speed** [Mobile Only]: A touch-screen shortcut for skimming. Pressing and holding anywhere on the video player temporarily increases playback speed. Normal playback resumes when released.
-- **Hold Speed** [Mobile Only]: Configures the exact playback speed multiplier when using the "Hold To Speed" feature.
 - **Touch Gestures** [Mobile Only]: Enables swipes and double-taps on the player screen to seek forward/backward, adjust brightness (left side), or adjust volume (right side).
+- **Hold To Speed** [Mobile Only]: A touch-screen shortcut for skimming. Pressing and holding anywhere on the video player temporarily increases playback speed. Normal playback resumes when released.
+  - **Hold Speed** [Mobile Only]: Configures the exact playback speed multiplier when using the "Hold To Speed" feature.
+     - *Options:* 1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x.
 
 ### Advanced Processing & Decoding
 Technical settings that determine how your device's hardware and software process raw video and audio data.
 
+- **Playback Engine:** Dictates which video engine handles your streams. Choose between **ExoPlayer**, **Libmpv (Beta)**, or **Auto (Best for Content)** (automatically uses ExoPlayer for Movies/TV Shows and MPV for Anime—[see why](#mpv)).
+- **Auto-switch engine on startup error** [Android TV Only]: Automatically falls back from ExoPlayer to libmpv for detected anime or if a stream fails to initialize.
 - **Decoder Priority:** Controls whether hardware or software (FFmpeg) decoders are used for audio and video.
   - *Device decoders only:* Only use built-in hardware decoders. Most compatible but may not support all formats.
   - *Prefer device decoders:* Use hardware decoders when available, fall back to FFmpeg. Recommended for most devices.
@@ -195,6 +198,9 @@ Technical settings that determine how your device's hardware and software proces
 - **Force AC-3 Transcoding (Optical/SPDIF):** Transcodes multichannel formats (TrueHD, DTS, AAC, etc.) to Dolby Digital 5.1 in real-time for Optical/SPDIF connections.
   - Older optical audio cables (the ones with the glowing red light) have a strict bandwidth limit. They physically cannot transmit heavy, modern, uncompressed audio formats like TrueHD or DTS-HD. They max out at standard Dolby Digital 5.1 (also known as AC-3).
   - If you have an older AV receiver or soundbar hooked up to your TV via an optical cable, trying to play a modern 4K movie with a TrueHD track will result in dead silence or horrible static. This setting acts as a live translator. It grabs the heavy modern audio and instantly crushes it down into standard Dolby Digital 5.1 on the fly, ensuring your older sound system can actually play the movie.
+ 
+> [!TIP]
+> Check out [Additional MPV Options for Mobile devices](#additional-mpv-options-mobile-only)!
 
 [Back to top](#Nuvio-player-settings)
 
