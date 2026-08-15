@@ -1,0 +1,260 @@
+# Nuvio Player Settings
+
+Nuvio offers a variety of player settings to customize your experience.
+
+> [!IMPORTANT]
+> Anything not labeled [Android TV Only], [Mobile Only], or [Windows Only] is available on Mobile, Android TV, and Windows.
+
+---
+
+## Intro and Outro Skip
+
+Nuvio uses three separate databases for intro and outro skipping, prioritized in this order: **IntroDB**, **AniSkip**, and **Anime Skip**.
+
+- **IntroDB** and **AniSkip**
+    - Can be toggled on or off directly.
+- **Anime Skip**
+    - Requires an ID and configuration to use. Click [here](#animeskip-id) to learn how.
+
+- **Automatic Skipping** [Android TV Only]: Choose which segments (intros, outros, and recaps) skip automatically without prompting.
+
+**To toggle these features:**
+1. Go to **Settings**
+2. Select **Playback**
+3. Toggle the options under **Skip Segments**
+
+> [!TIP]
+> You can also submit intros and outros to IntroDB from within Nuvio [Mobile Windows]. Click [here](#submitting-introdb) to learn how.
+
+<a name="animeskip-id"></a>
+**To obtain a free Anime Skip Client ID:**
+1. Go to [Anime Skip](https://anime-skip.com).
+2. Create an account.
+3. Once logged in, go to your profile.
+4. Select **API Clients**.
+5. Select **Add a New Client**.
+6. Enter the app name "Nuvio" and a description of "Nuvio".
+7. Select **Create**.
+8. Copy the generated Client ID (a long string of numbers and letters).
+9. Go back into Nuvio, paste the Client ID, and select **Save**.
+
+<a name="submitting-introdb"></a>
+**To submit Intros and Outros to IntroDB** [Mobile Windows]:
+
+Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
+1. Go to [Intro DB](https://introdb.app).
+2. Create an account.
+3. Once logged in, go to **Account Settings**.
+4. Select **Generate Key**.
+5. Copy the key.
+6. Go back into Nuvio, paste the API key, and select **Save**.
+
+- **Content Warnings:** Show parental guidance overlay when playback starts.
+
+[Back to top](#Nuvio-player-settings)
+
+---
+
+## Stream Selection and Stream Auto Play
+
+### Stream Selection
+
+Stream selection includes two main options:
+
+- **Reuse Last Link:** When resuming a title, Nuvio will attempt to use the exact same stream you selected during your previous session.
+- **Last Link Cache Duration:** Determines how long Nuvio holds onto the last selected link. Options include 1, 2, 3, 6, and 12 hours, as well as 1, 2, 3, and 7 days.
+
+> [!NOTE]
+> Debrid service links are typically only valid for a specific time period. Selecting a duration that is too long can cause Nuvio to attempt playback on an expired, invalid link.
+
+### Stream and Auto-Play
+
+This section dictates how the application behaves when you select a media item, whether it automatically launches a stream or lets you choose your own link.
+
+- **Auto Stream Selection**
+Determines the logic used to handle available streams:
+  - **Auto-play first source:** Automatically scans for media streams and instantly plays the first valid source it encounters without prompting you.
+  - **Manual:** Displays a comprehensive list of all discovered streams, allowing you to manually review and select based on quality, file size, or source.
+  - **Auto-play regex match:** An advanced filtering mode that scans stream titles or metadata for specific text patterns (e.g., 1080p, 4K, HEVC, specific release groups) and prioritizes or filters matches based on your custom regular expressions.
+
+- **Stream Selection Timeout**
+Sets the maximum duration the application will wait for addons or plugins to return their results before proceeding:
+  - *Options:* **Instant**, **5s to 30s** (in 5-second increments), **Unlimited**.
+  - *How it works:* If a timeout is hit, Nuvio stops searching and plays the best option found so far (if auto-playing) or presents a partial list (if manual). Choosing **Unlimited** ensures the app waits until every provider has finished searching, regardless of the time it takes.
+
+### Source & Addon Filtering
+These configurations control exactly which addons or plugins are allowed to search for and supply streams.
+
+- **Auto-play Source Scope:** Narrows down the pool of providers when using an automated playback mode.
+  - *Options:* **All sources**, **Installed addons only**, **Enabled plugins only**.
+- **Allowed Addons:** Provides granular control over installed extensions during the search process.
+  - *Options:* **All installed addons**, **Custom Selection**.
+- **Allowed Plugins:** Controls the plugins used during the search process.
+  - *Options:* **All enabled plugins**, **Custom Selection**.
+
+[Back to top](#Nuvio-player-settings)
+
+---
+
+## Next Episode
+
+The Next Episode category includes several settings to optimize continuous viewing:
+
+- **Auto-Play Next Episode:** When toggled on, Nuvio starts the source selection process as soon as the "next episode" prompt appears. This prompt is triggered by either:
+  - An Outro skip is triggered.
+  - If no Outro skip is present, the Next Episode Threshold is met.
+- **Prefer Binge Group:** Nuvio will try to find the next episode using the same source profile before falling back to other options. For example, if you watched an episode via *AIOStreams*, Nuvio will attempt to find the next episode from *AIOStreams* in the same quality before trying other providers.
+- **Reuse Binge Groups:** Ensures that when you return to a TV series, the app automatically remembers and prioritizes the exact same stream source or release group you were previously watching. If you selected a specific 1080p release group, your session anchors to that profile. When resuming from "Continue Watching," Nuvio will specifically look for that exact release group rather than auto-selecting a new source.
+- **Next Episode Threshold Mode:** Used as a fallback if no outro skip is present. This can be set in 0.5% increments from 100% down to 97%.
+  - **Percentage:** This can be set in 0.5% increments from 100% down to 97%.
+    - *At 100%:* Nuvio will not begin the source selection process until the media is completely finished.
+    - *At 97%:* Nuvio will begin the source selection process when the media is 97% complete (e.g., for a 30-minute show, selection begins at 29 minutes and 6 seconds).
+  - **Minutes before end:** This can be set in increments of 0.5 minutes, from 3.5 minutes down to 0 minutes.
+    - *At 3.5 min:* Nuvio will begin the source selection process when the media has 3.5 minutes left.
+    - *At 0 min:* Nuvio will not begin the source selection process until the media is completely finished.
+- **Are You Still Watching?** [Android TV Only]: Prompts the user after a set number of consecutive auto-played episodes to prevent infinite playback if you fall asleep.
+  - **Episode Threshold:** Configures the number of consecutive auto-played episodes before the prompt appears.
+- **Show loading status:** Displays a loading status indicator during the next-episode source selection process.
+
+[Back to top](#Nuvio-player-settings)
+
+---
+
+## Subtitle and Audio
+
+### Audio Settings
+These settings determine the default spoken language tracks selected when a stream starts.
+- **Preferred Audio Language:** The primary spoken language you want the application to automatically select if the media file contains multiple audio tracks.
+- **Secondary Audio Language:** Your fallback audio track if the primary choice is unavailable.
+- **Skip Silence** [Android TV Only]: Dynamically skips silent portions of audio during playback.
+- **Remember audio delay per device** [Android TV Only]: Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
+- **Enable downmix** [Android TV Only]: Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
+  - "Downmixing" means taking a massive surround sound audio track (like 5.1 or 7.1 audio meant for 6 to 8 speakers) and squishing it down into just two channels (Left and Right) for a standard stereo setup.
+  - If you are just using your built-in TV speakers or a basic 2.0 soundbar, your system physically cannot play the dedicated "center channel" where 90% of the dialogue comes from in modern movies. If you ever feel like the explosions are deafening but the actors' voices are whispering, it is because you are missing the center channel. Turning this on forces the app to correctly blend all those surround sound speakers into a stereo format so you can hear the voices clearly.
+- **Maintain original audio on downmix** [Android TV Only]: When enabled, preserves the original audio track alongside the downmixed stereo output. Useful if you switch between speaker setups.
+- **Number of channels** [Android TV Only]: Sets the output channel configuration. Options include 2.0 (Stereo), 5.1, 6.1, and 7.1. Choose the configuration that matches your speaker or soundbar setup.
+
+### Subtitle Preferences
+These configurations control which text translations are displayed on screen and how menus are filtered.
+- **Preferred Language:** The primary language for your subtitles.
+- **Secondary Preferred Language:** Your fallback subtitle language.
+- **Use Forced Subtitles (Toggle On/Off):** Prioritizes "forced" subtitles that match your preferred language. Forced subtitles translate foreign languages, alien dialogue, or on-screen text while the rest of the media remains in your primary spoken language.
+- **Show Only Preferred Languages (Toggle On/Off):** Filters the subtitle menu to hide all tracks except those that exactly match your primary and secondary language preferences.
+- **Subtitle Styling:** Offers granular control over subtitle aesthetics including **Size (Scaling)**, **Vertical Offset** (to accommodate letterboxing), **Text Color**, **Background Color**, **Outline/Outline Color**, and **Bold** (use bold font weight for subtitles).
+- **Use libass for ASS/SSA subtitles:** An experimental toggle to use the advanced libass engine for rendering complex styles, positioning, and animations of ASS/SSA subtitles.
+  - Turning this on tells the player to use a specialized graphics engine (libass) to draw complex subtitles perfectly. If left off, the player might strip out all the colors and placement formatting, or worse, crash trying to read the file.
+  - *Libass Render Mode* [Android TV Only]: When libass is enabled, select the exact rendering pipeline: *Overlay OpenGL* (Recommended for best quality and HDR support), *Overlay Canvas* (HDR support without OpenGL), *Effects OpenGL* (Animation support with Media3 effects), *Effects Canvas*, or *Standard Cues* (Basic subtitle rendering without animation).
+
+### Addon Subtitle Startup
+Controls how aggressively Nuvio searches for external subtitles when a video begins playing, balancing load times against availability.
+- **Fast startup:** Prioritizes immediate video playback by skipping the automatic fetch of external addon subtitles. You must manually request them from within the player.
+- **Preferred only:** A balanced approach. Fetches subtitles from addons during the initial load, but only pulls those matching your language preferences.
+- **All subtitles:** Fetches and loads every available addon subtitle for the video, maximizing choice at the cost of slightly longer loading times.
+
+[Back to top](#Nuvio-player-settings)
+
+---
+
+## Player and Decoder Options
+
+### Video Player & Interface
+Controls the visual experience and interactions within the media player.
+
+- **Loading Overlay:** Displays a continuous loading screen or graphic to hide buffering, black screens, or transitions. The overlay remains visible until the first frame of the video is ready.
+- **Pause Overlay:** Shows a details overlay after 5 seconds while playback is paused.
+- **OSD Clock** [Android TV Only]: Shows the current time and estimated end time while the transport controls are visible on screen.
+- **Player:** Dictates which video engine handles your streams.
+  - *Internal:* Keeps you inside Nuvio using its native player.
+  - *Internal Engine:* Choose between **ExoPlayer**, **Libmpv (Beta)**, or **Auto (Best for Content)** (automatically uses ExoPlayer for Movies/TV Shows and MPV for Anime).
+  - *Auto-switch engine on startup error* [Android TV Only]: Automatically falls back from ExoPlayer to libmpv for detected anime or if a stream fails to initialize.
+  - *External:* Passes the video link to a third-party application installed on your device (e.g., VLC, MX Player).
+- **Hold To Speed** [Mobile Only]: A touch-screen shortcut for skimming. Pressing and holding anywhere on the video player temporarily increases playback speed. Normal playback resumes when released.
+- **Hold Speed** [Mobile Only]: Configures the exact playback speed multiplier when using the "Hold To Speed" feature.
+- **Touch Gestures** [Mobile Only]: Enables swipes and double-taps on the player screen to seek forward/backward, adjust brightness (left side), or adjust volume (right side).
+
+### Advanced Processing & Decoding
+Technical settings that determine how your device's hardware and software process raw video and audio data.
+
+- **Decoder Priority:** Controls whether hardware or software (FFmpeg) decoders are used for audio and video.
+  - *Device decoders only:* Only use built-in hardware decoders. Most compatible but may not support all formats.
+  - *Prefer device decoders:* Use hardware decoders when available, fall back to FFmpeg. Recommended for most devices.
+  - *Prefer app decoders (FFmpeg):* Use FFmpeg decoders when available. Better format support but higher CPU usage.
+- **DV7 - HEVC Fallback:** Dolby Vision Profile 7 (DV7) is a premium HDR format. Playing a DV7 file on unsupported hardware often results in distorted colors (e.g., a completely purple or green screen). Enabling this strips the unreadable Dolby Vision data and maps the video down to standard HEVC (H.265) for correct color playback.
+- **Preserve DV mapping (DV7 to DV8.1)** [Android TV Only]: Keeps original creator-intended tone-mapping at the cost of slightly more processing power per frame.
+- **Convert DV5 to DV8.1** [Android TV Only]: Signals Profile 5 streams as Profile 8.1 for HDR10-compatible output, helping correctly map colors on devices that lack a native DV5 decoder.
+- **Strip HDR10+ Metadata:** Removes HDR10+ dynamic metadata from the video stream. Useful if your display does not support HDR10+ and the metadata causes rendering issues.
+- **Hardware Decoding (mpv-only):** When using the libmpv engine, toggles hardware-accelerated decoding on or off for that engine specifically.
+- **Auto Frame Rate & Resolution** [Android TV Only]: Dynamically adjusts your television hardware's refresh rate to natively match the source file frame pacing, eliminating panning judder. Options include:
+  - *Off:* Don't change display refresh rate.
+  - *On start:* Switch when playback starts.
+  - *On start/stop:* Switch on start and restore on stop.
+- **Tunneled Playback:** Uses an optimized low-level playback path for audio and video. This improves audio/video synchronization (lip-sync) and can provide smoother playback for demanding 4K HDR files.
+  - Normally, your device processes video, audio, interface elements, and background tasks through shared system pathways. Tunneled Playback creates a more direct route between the media stream and the device's playback hardware.
+  - Recommendation: Leave this off by default. Enable it if you experience lip-sync issues or if demanding 4K HDR files drop frames or stutter. Because hardware support varies between devices, disable it again if playback glitches occur.
+- **RTX Video Super Resolution** [Windows Only]: Upscales low-resolution video using NVIDIA RTX AI Super Resolution.
+- **Force AC-3 Transcoding (Optical/SPDIF):** Transcodes multichannel formats (TrueHD, DTS, AAC, etc.) to Dolby Digital 5.1 in real-time for Optical/SPDIF connections.
+  - Older optical audio cables (the ones with the glowing red light) have a strict bandwidth limit. They physically cannot transmit heavy, modern, uncompressed audio formats like TrueHD or DTS-HD. They max out at standard Dolby Digital 5.1 (also known as AC-3).
+  - If you have an older AV receiver or soundbar hooked up to your TV via an optical cable, trying to play a modern 4K movie with a TrueHD track will result in dead silence or horrible static. This setting acts as a live translator. It grabs the heavy modern audio and instantly crushes it down into standard Dolby Digital 5.1 on the fly, ensuring your older sound system can actually play the movie.
+
+[Back to top](#Nuvio-player-settings)
+
+---
+
+## Buffer and Network [Android TV Only]
+
+These configurations govern internal memory allocation thresholds, local system caching pools, and network data transit rules on Android TV.
+
+They live together under **Settings → Playback → Buffer & Network**, but they are **not all the same feature**:
+
+- **ExoPlayer Native Memory:** Optional engine path for how the buffer is stored in RAM.
+- **Custom Playback Buffers:** Time windows and target size for ahead-buffering. Works with or without Native Memory.
+- **Disk Cache:** Optional on-disk progressive cache.
+- **Custom Network / Parallel Connections:** Multi-connection downloads for progressive streams. Works with or without Native Memory.
+
+> [!IMPORTANT]
+> These options exist on the **Android TV** build of Nuvio only. They are not available on Mobile, iOS, or webOS.
+
+---
+
+### ExoPlayer Native Memory
+
+During playback, Nuvio continuously caches upcoming media ahead of the active cursor position so short network interruptions do not stall the stream. That reserve is the **buffer**.
+
+On many Android TV sticks and boxes, the application is constrained to a limited private memory footprint even when the device reports substantial total RAM. High-bitrate 4K and remux sources demand large ahead-buffers. When those buffers compete inside the app's restricted private share, users can encounter mid-playback stalls, laggy interface response, or process instability, even while free system memory still appears available.
+
+**ExoPlayer Native Memory** relocates that ready-ahead buffer into a more efficient native memory region and enables a streamlined data path through the ExoPlayer engine. In practical terms, Nuvio can retain more upcoming content without colliding with the device's usual per-app memory ceiling.
+
+When the mode is enabled, Nuvio also:
+
+- Applies a tuned starter profile for buffer durations, target allocation size, and parallel download behavior
+- Surfaces device memory detection and a **Recommended Safety Limit** beneath the toggle
+- Unlocks extended buffer duration ranges under **Custom Playback Buffers** compared with stock mode
+
+What Native Memory does **not** alter:
+
+- Picture quality, HDR tone mapping, or decoder selection
+- Network bandwidth itself. A source that exceeds your real download speed will still stall.
+- Playback under the **libmpv** internal engine. This path applies only to **ExoPlayer**.
+- Whether you *must* use Parallel Connections. Network settings remain independently configurable.
+
+> [!NOTE]
+> Devices must run **Android 8.0 (Oreo)** or newer. Older firmware displays a not-supported message under the toggle.
+
+**Enable Native Memory when:**
+
+- High-quality 1080p or 4K streams continue rebuffering despite a stable, sufficient connection
+- Scrubbing inside an already-buffered range feels sluggish on TV hardware
+- You routinely play debrid-backed remuxes or other large progressive sources on a stick or box
+
+**Leave Native Memory disabled when:**
+
+- Stock playback is already stable and you prefer default Media3 behavior
+- Enabling the mode introduces instability on very low-memory hardware
+- You are isolating a codec/renderer issue and want the simplest player memory path
+
+**Recommended baseline after enabling:**
+
+1. Enable **ExoPlayer Native Memory**.
+2. Keep **Managed Memory Budget** active.
+3. Leave remaining buffer sliders at the values Nuvio applies on enable.
+4. Evaluate with a representative title befo
