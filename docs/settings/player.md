@@ -176,7 +176,7 @@ Controls the visual experience and interactions within the media player.
   - *External:* Passes the video link to a third-party application installed on your device (e.g., VLC, MX Player).
 - **Touch Gestures** [Mobile Only]: Enables swipes and double-taps on the player screen to seek forward/backward, adjust brightness (left side), or adjust volume (right side).
 - **Hold To Speed** [Mobile Only]: A touch-screen shortcut for skimming. Pressing and holding anywhere on the video player temporarily increases playback speed. Normal playback resumes when released.
-  - **Hold Speed** [Mobile Only]: Configures the exact playback speed multiplier when using the "Hold To Speed" feature.
+  - **Hold Speed:** Configures the exact playback speed multiplier when using the "Hold To Speed" feature.
      - *Options:* 1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x.
 
 ### Advanced Processing & Decoding
