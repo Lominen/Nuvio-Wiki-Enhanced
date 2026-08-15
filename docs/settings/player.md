@@ -23,8 +23,26 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 2. Select **Playback**.
 3. Toggle the options under **Skip Segments**.
 
-> [!TIP]
-> You can also submit intros and outros to IntroDB from within Nuvio [Mobile Windows]. Click [here](#submitting-introdb) to learn how.
+**To obtain a free Anime Skip Client ID:**
+1. Go to [Anime Skip](https://anime-skip.com).
+2. Create an account.
+3. Once logged in, go to your profile.
+4. Select **API Clients**.
+5. Select **Add a New Client**.
+6. Enter the app name "Nuvio" and a description of "Nuvio".
+7. Select **Create**.
+8. Copy the generated Client ID (a long string of numbers and letters).
+9. Go back into Nuvio, paste the Client ID, and select **Save**.
+
+**To submit Intros and Outros to IntroDB** [Mobile Windows]:
+
+Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
+1. Go to [Intro DB](https://introdb.app).
+2. Create an account.
+3. Once logged in, go to **Account Settings**.
+4. Select **Generate Key**.
+5. Copy the key.
+6. Go back into Nuvio, paste the API key, and select **Save**.
 
 [Back to top](#Nuvio-player-settings)
 
@@ -195,11 +213,6 @@ They live together under **Settings → Playback → Buffer & Network**, but the
 
 > [!IMPORTANT]
 > These options exist on the **Android TV** build of Nuvio only. They are not available on Mobile, iOS, or webOS.
-
-> [!TIP]
-> Also check out [Buffer & Network Tips](#buffer-&-network-tips).
-
-[Back to top](#nuvio-player-settings)
 
 ---
 
@@ -396,7 +409,7 @@ Compare **Baseline** to the best **Parallel** row:
 ### Recommended Device Configurations
 
 > [!TIP]
-> You can jump straight to [Quick “I just want it to work” path](#quick-i-just-want-it-to-work-path) if you don't want to study the details.
+> Jump straight to [Quick “I just want it to work” path](#quick-i-just-want-it-to-work-path) if you don't want to go through the details.
 
 Nuvio detects physical device RAM and maps it to a **Recommended Safety Limit** for target buffer allocations. Use the readout under **ExoPlayer Native Memory** (for example Device Memory: 4 GB, Recommended Safety Limit: 1000 MB) to identify your tier, then apply the matching profile below.
 
@@ -574,7 +587,7 @@ The Mobile app exposes additional libmpv configuration options:
   - *GPU:* The legacy GPU rendering path. Use as a fallback if *GPU next* causes visual artifacts.
 - **libmpv YUV420P Compatibility:** Forces libmpv to use YUV420P pixel format output for maximum compatibility with device display pipelines. Enable this if you experience color issues or rendering glitches with specific video files on your mobile device.
 
-### Recommended Device Settings for MPV [Android TV Only]
+### Recommended Device Settings [Android TV Only]
 
 - **For General Viewing:** Set to **Auto (auto-safe)** or **Hardware (direct)**. This will give you the best battery life and the smoothest playback for standard movies and TV shows.
 - **For Anime Watchers:** Set to **Hardware (copy) (mediacodec-copy)**. If you are watching anime with heavy, stylized subtitles and notice visual glitches or black screens, "copy" mode ensures the subtitles can be properly layered over the video.
@@ -583,38 +596,5 @@ The Mobile app exposes additional libmpv configuration options:
 > This option can cause the player to lag if you do not have sufficient resources to decode the video. Weaker Android TV boxes can struggle with this option.
 
 - **For Troubleshooting:** If a specific video file is playing with a green screen, distorted colors, or just audio with no picture, change this to **Disabled (no)**. Forcing software decoding will usually bypass hardware incompatibilities and allow the file to play.
-
-[Back to top](#nuvio-player-settings)
-
----
-
-<a name="animeskip-id"></a>
-### AnimeSkip Client ID
-
-**To obtain a free Anime Skip Client ID:**
-1. Go to [Anime Skip](https://anime-skip.com).
-2. Create an account.
-3. Once logged in, go to your profile.
-4. Select **API Clients**.
-5. Select **Add a New Client**.
-6. Enter the app name "Nuvio" and a description of "Nuvio".
-7. Select **Create**.
-8. Copy the generated Client ID (a long string of numbers and letters).
-9. Go back into Nuvio, paste the Client ID, and select **Save**.
-
----
-
-<a name="submitting-introdb"></a>
-### Submitting Intros and Outros
-
-**To submit Intros and Outros to IntroDB** [Mobile Windows]:
-
-Nuvio allows you to submit timestamps to IntroDB's community-sourced database. You will need an API key:
-1. Go to [Intro DB](https://introdb.app).
-2. Create an account.
-3. Once logged in, go to **Account Settings**.
-4. Select **Generate Key**.
-5. Copy the key.
-6. Go back into Nuvio, paste the API key, and select **Save**.
 
 [Back to top](#nuvio-player-settings)
