@@ -17,8 +17,6 @@ Nuvio uses three separate databases for intro and outro skipping, prioritized in
 - **Anime Skip**
     - Requires an ID and configuration to use. Click [here](#animeskip-id) to learn how.
 
-- **Automatic Skipping** [Android TV Only]: Choose which segments (intros, outros, and recaps) skip automatically without prompting.
-
 **To toggle these features:**
 1. Go to **Settings**
 2. Select **Playback**
