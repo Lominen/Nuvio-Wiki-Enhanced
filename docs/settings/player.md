@@ -71,26 +71,26 @@ Stream selection includes two main options:
 
 This section dictates how the application behaves when you select a media item, whether it automatically launches a stream or lets you choose your own link.
 
-**Auto Stream Selection**
+- **Auto Stream Selection**
 Determines the logic used to handle available streams:
-- **Auto-play first source:** Automatically scans for media streams and instantly plays the first valid source it encounters without prompting you.
-- **Manual:** Displays a comprehensive list of all discovered streams, allowing you to manually review and select based on quality, file size, or source.
-- **Auto-play regex match:** An advanced filtering mode that scans stream titles or metadata for specific text patterns (e.g., 1080p, 4K, HEVC, specific release groups) and prioritizes or filters matches based on your custom regular expressions.
+  - **Auto-play first source:** Automatically scans for media streams and instantly plays the first valid source it encounters without prompting you.
+  - **Manual:** Displays a comprehensive list of all discovered streams, allowing you to manually review and select based on quality, file size, or source.
+  - **Auto-play regex match:** An advanced filtering mode that scans stream titles or metadata for specific text patterns (e.g., 1080p, 4K, HEVC, specific release groups) and prioritizes or filters matches based on your custom regular expressions.
 
-**Stream Selection Timeout**
+- **Stream Selection Timeout**
 Sets the maximum duration the application will wait for addons or plugins to return their results before proceeding:
-- **Options:** Instant, 5s to 30s (in 5-second increments), Unlimited.
-- *How it works:* If a timeout is hit, Nuvio stops searching and plays the best option found so far (if auto-playing) or presents a partial list (if manual). Choosing **Unlimited** ensures the app waits until every provider has finished searching, regardless of the time it takes.
+  - *Options:* **Instant**, **5s to 30s** (in 5-second increments), **Unlimited**.
+  - *How it works:* If a timeout is hit, Nuvio stops searching and plays the best option found so far (if auto-playing) or presents a partial list (if manual). Choosing **Unlimited** ensures the app waits until every provider has finished searching, regardless of the time it takes.
 
-**Source & Addon Filtering**
+### Source & Addon Filtering
 These configurations control exactly which addons or plugins are allowed to search for and supply streams.
 
 - **Auto-play Source Scope:** Narrows down the pool of providers when using an automated playback mode.
-  - *Options:* All sources, Select addons, Plugins only.
+  - *Options:* **All sources**, **Installed addons only**, **Enabled plugins only**.
 - **Allowed Addons:** Provides granular control over installed extensions during the search process.
-  - *Options:* All addons, Custom Selection.
+  - *Options:* **All installed addons**, **Custom Selection**.
 - **Allowed Plugins:** Controls the plugins used during the search process.
-  - *Options:* All enabled plugins, Custom Selection.
+  - *Options:* **All enabled plugins**, **Custom Selection**.
 
 [Back to top](#Nuvio-player-settings)
 
@@ -106,10 +106,14 @@ The Next Episode category includes several settings to optimize continuous viewi
 - **Prefer Binge Group:** Nuvio will try to find the next episode using the same source profile before falling back to other options. For example, if you watched an episode via *AIOStreams*, Nuvio will attempt to find the next episode from *AIOStreams* in the same quality before trying other providers.
 - **Reuse Binge Groups:** Ensures that when you return to a TV series, the app automatically remembers and prioritizes the exact same stream source or release group you were previously watching. If you selected a specific 1080p release group, your session anchors to that profile. When resuming from "Continue Watching," Nuvio will specifically look for that exact release group rather than auto-selecting a new source.
 - **Next Episode Threshold Mode:** Used as a fallback if no outro skip is present. This can be set in 0.5% increments from 100% down to 97%.
-  - *At 100%:* Nuvio will not begin the source selection process until the media is completely finished.
-  - *At 97%:* Nuvio will begin the source selection process when the media is 97% complete (e.g., for a 30-minute show, selection begins at 29 minutes and 6 seconds).
+  - **Percentage:** This can be set in 0.5% increments from 100% down to 97%.
+    - *At 100%:* Nuvio will not begin the source selection process until the media is completely finished.
+    - *At 97%:* Nuvio will begin the source selection process when the media is 97% complete (e.g., for a 30-minute show, selection begins at 29 minutes and 6 seconds).
+  - **Minutes before end:** This can be set in increments of 0.5 minutes, from 3.5 minutes down to 0 minutes.
+    - *At 3.5 min:* Nuvio will begin the source selection process when the media has 3.5 minutes left.
+    - *At 0 min:* Nuvio will not begin the source selection process until the media is completely finished.
 - **Are You Still Watching?** [Android TV Only]: Prompts the user after a set number of consecutive auto-played episodes to prevent infinite playback if you fall asleep.
-  - *Episode Threshold:* Configures the number of consecutive auto-played episodes before the prompt appears.
+  - **Episode Threshold:** Configures the number of consecutive auto-played episodes before the prompt appears.
 - **Show loading status:** Displays a loading status indicator during the next-episode source selection process.
 
 [Back to top](#Nuvio-player-settings)
@@ -122,13 +126,13 @@ The Next Episode category includes several settings to optimize continuous viewi
 These settings determine the default spoken language tracks selected when a stream starts.
 - **Preferred Audio Language:** The primary spoken language you want the application to automatically select if the media file contains multiple audio tracks.
 - **Secondary Audio Language:** Your fallback audio track if the primary choice is unavailable.
-- **Skip Silence:** Dynamically skips silent portions of audio during playback.
-- **Remember audio delay per device:** Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
-- **Enable downmix:** Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
+- **Skip Silence** [Android TV Only]: Dynamically skips silent portions of audio during playback.
+- **Remember audio delay per device** [Android TV Only]: Saves your audio delay adjustments on a per-device basis so the offset is automatically restored the next time you play on the same hardware.
+- **Enable downmix** [Android TV Only]: Uses the FFmpeg downmix path for audio processing. When disabled, audio follows the standard Android/device path.
   - "Downmixing" means taking a massive surround sound audio track (like 5.1 or 7.1 audio meant for 6 to 8 speakers) and squishing it down into just two channels (Left and Right) for a standard stereo setup.
   - If you are just using your built-in TV speakers or a basic 2.0 soundbar, your system physically cannot play the dedicated "center channel" where 90% of the dialogue comes from in modern movies. If you ever feel like the explosions are deafening but the actors' voices are whispering, it is because you are missing the center channel. Turning this on forces the app to correctly blend all those surround sound speakers into a stereo format so you can hear the voices clearly.
-- **Maintain original audio on downmix:** When enabled, preserves the original audio track alongside the downmixed stereo output. Useful if you switch between speaker setups.
-- **Number of channels:** Sets the output channel configuration. Options include 2.0 (Stereo), 5.1, 6.1, and 7.1. Choose the configuration that matches your speaker or soundbar setup.
+- **Maintain original audio on downmix** [Android TV Only]: When enabled, preserves the original audio track alongside the downmixed stereo output. Useful if you switch between speaker setups.
+- **Number of channels** [Android TV Only]: Sets the output channel configuration. Options include 2.0 (Stereo), 5.1, 6.1, and 7.1. Choose the configuration that matches your speaker or soundbar setup.
 
 ### Subtitle Preferences
 These configurations control which text translations are displayed on screen and how menus are filtered.
